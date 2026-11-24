@@ -29,7 +29,7 @@ export const CLONE_ARCHETYPES: Record<CloneArchetypeId, CloneArchetype> = {
     name: 'Tank',
     code: 'TNK-01',
     role: 'Armored Juggernaut',
-    passiveLabel: '+30% Max HP & +20% Armor Mitigation',
+    passiveLabel: '+30% Max Shield & +20% Armor Mitigation',
     primaryHex: '#f59e0b',
     secondaryHex: '#453224',
     accentHex: '#fde68a',
@@ -51,7 +51,7 @@ export const CLONE_ARCHETYPES: Record<CloneArchetypeId, CloneArchetype> = {
     name: 'Assault',
     code: 'ASL-02',
     role: 'Close-Quarters Striker',
-    passiveLabel: '+25% Melee & Hatchet Damage',
+    passiveLabel: '+25% Melee & Hatchet Output',
     primaryHex: '#dc2626',
     secondaryHex: '#1f2937',
     accentHex: '#fca5a5',
@@ -117,7 +117,7 @@ export const CLONE_ARCHETYPES: Record<CloneArchetypeId, CloneArchetype> = {
     name: 'Medic',
     code: 'MED-05',
     role: 'Bio-Support Specialist',
-    passiveLabel: '+40% Stim Healing, Passive HP Regen & +2 Stims',
+    passiveLabel: '+40% Shield Patch Restore, Passive Regen & +2 Patches',
     primaryHex: '#e2e8f0',
     secondaryHex: '#0f766e',
     accentHex: '#5eead4',
@@ -171,7 +171,7 @@ export interface InventoryState {
 export interface CraftingRecipe {
   id: 'pickaxe' | 'hatchet' | 'bow' | 'arrows' | 'armor' | 'stim';
   name: string;
-  category: 'Tool' | 'Weapon' | 'Ammo' | 'Armor' | 'Medical';
+  category: 'Tool' | 'Weapon' | 'Ammo' | 'Armor' | 'Support';
   description: string;
   cost: { wood: number; stone: number; fiber: number };
   oneTime: boolean;
@@ -188,41 +188,41 @@ export const CRAFTING_RECIPES: CraftingRecipe[] = [
   },
   {
     id: 'hatchet',
-    name: 'Stone Hatchet',
+    name: 'Forest Hatchet',
     category: 'Weapon',
-    description: '2.2x timber harvest speed and 4-hit melee cleave combo.',
+    description: '2.2x timber harvest speed and 4-hit energy pulse combo.',
     cost: { wood: 3, stone: 2, fiber: 3 },
     oneTime: true,
   },
   {
     id: 'bow',
-    name: 'Wooden Bow',
+    name: 'Recurve Bow',
     category: 'Weapon',
-    description: 'Essential ranged weapon for flying Sky-Pterons & hovering ATLAS (+8 arrows).',
+    description: 'Ranged stun-arrow launcher for Sky-Pterons & hovering ATLAS (+8 arrows).',
     cost: { wood: 5, stone: 0, fiber: 6 },
     oneTime: true,
   },
   {
     id: 'arrows',
-    name: 'Arrow Bundle (x10)',
+    name: 'Fletched Arrows (x10)',
     category: 'Ammo',
-    description: 'Craft 10 flint-tipped arrows for the Wooden Bow.',
+    description: 'Craft 10 balanced stun-tipped arrows for the Recurve Bow.',
     cost: { wood: 2, stone: 2, fiber: 2 },
     oneTime: false,
   },
   {
     id: 'armor',
-    name: 'Hide & Bark Armor (Tier 1)',
+    name: 'Composite Bark Armor (Tier 1)',
     category: 'Armor',
-    description: 'Reduces all incoming hazard & creature damage by 35%.',
+    description: 'Absorbs 35% of incoming energy & creature impact force.',
     cost: { wood: 6, stone: 2, fiber: 8 },
     oneTime: true,
   },
   {
     id: 'stim',
-    name: 'Bio-Fiber Med Patch',
-    category: 'Medical',
-    description: 'Restores 45 HP immediately when activated from hotbar slot 4.',
+    name: 'Bio-Shield Patch',
+    category: 'Support',
+    description: 'Restores 45 Suit Integrity immediately from hotbar slot 4.',
     cost: { wood: 0, stone: 0, fiber: 4 },
     oneTime: false,
   },
@@ -258,6 +258,8 @@ export interface BeaconStatus {
   y: number;
   z: number;
   isFloating: boolean;
+  locked: boolean;
+  guardiansRemaining: number;
   progress: number;
   repaired: boolean;
   woodDeposited: number;
@@ -289,6 +291,7 @@ export interface EnemyHudLabel {
   hp: number;
   maxHp: number;
   visible: boolean;
+  guardBeaconId: number | null;
 }
 
 export interface BossHudState {
@@ -299,7 +302,7 @@ export interface BossHudState {
   stage: number; // 1..7
   maxStages: number;
   immune: boolean;
-  resting: boolean; // Descended & vulnerable to melee!
+  resting: boolean;
   subtitle: string;
   subtitleSpeaker: 'ATLAS' | 'SYSTEM';
 }
@@ -341,7 +344,15 @@ export interface HudSnapshot {
     forgeX: number;
     forgeZ: number;
     teammates: Array<{ id: string; x: number; z: number; color: string }>;
-    beacons: Array<{ id: number; x: number; y: number; z: number; repaired: boolean; isFloating: boolean }>;
+    beacons: Array<{
+      id: number;
+      x: number;
+      y: number;
+      z: number;
+      repaired: boolean;
+      isFloating: boolean;
+      locked: boolean;
+    }>;
     enemies: Array<{ x: number; z: number; isFlying: boolean }>;
   };
   projectedLabels: ProjectedLabel[];

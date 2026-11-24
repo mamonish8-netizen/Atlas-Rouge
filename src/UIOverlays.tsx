@@ -103,11 +103,13 @@ interface LobbyScreenProps {
 }
 
 const QUALITY_SCALE_HINT: Record<GraphicsQuality, string> = {
-  low: '0.55x Res',
-  medium: '0.85x Res',
-  high: '1.35x+ Res',
-  ultra: '2.50x Max Res',
+  low: '0.60x Res',
+  medium: '0.90x Res',
+  high: '1.40x+ Res',
+  ultra: '2.75x Max Res',
 };
+
+const BORDER_DROP_ZONES = ['South Rim', 'West Rim', 'North Rim', 'North-East Rim'];
 
 export const LobbyScreen: React.FC<LobbyScreenProps> = ({
   playerName,
@@ -248,7 +250,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
                     !micEnabled
                       ? 'bg-slate-800 text-slate-200 hover:bg-slate-700'
                       : isMuted
-                        ? 'bg-red-500/20 text-red-300 border border-red-500/40'
+                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                         : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
                   }`}
                 >
@@ -276,10 +278,18 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
             <div className="flex items-center justify-between">
               <h2 className="text-base font-semibold text-white flex items-center gap-2">
                 <Users className="w-4 h-4 text-cyan-400" />
-                <span>Co-Op Drop Squad ({partyMembers.length}/4)</span>
+                <span>
+                  {isSolo ? 'Solo Drop Pod (1/1)' : `Co-Op Drop Squad (${partyMembers.length}/4)`}
+                </span>
               </h2>
-              <span className="text-xs text-slate-400">
-                {isSolo ? 'Solo Mode' : isHost ? 'Hosting Co-Op' : 'Joined Co-Op'}
+              <span
+                className={`text-[11px] font-semibold px-2.5 py-0.5 rounded ${
+                  isSolo
+                    ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
+                    : 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                }`}
+              >
+                {isSolo ? 'SOLO MODE' : isHost ? 'HOSTING CO-OP' : 'JOINED CO-OP'}
               </span>
             </div>
 
@@ -307,7 +317,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
                 </button>
               </div>
 
-              {inviteCode && (
+              {!isSolo && inviteCode && (
                 <div className="flex items-center justify-between bg-slate-900 border border-cyan-500/30 rounded-lg px-3 py-2">
                   <div>
                     <div className="text-[11px] text-slate-400">Co-Op Party Invite Code</div>
@@ -331,7 +341,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
                   maxLength={6}
                   value={joinInput}
                   onChange={(e) => setJoinInput(e.target.value.toUpperCase())}
-                  placeholder="ENTER 6-CHAR CODE"
+                  placeholder="ENTER 6-CHAR CO-OP CODE"
                   className="flex-1 bg-slate-900 border border-white/15 rounded-lg px-3 py-2 text-xs font-mono-nums tracking-widest text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400"
                 />
                 <button
@@ -344,63 +354,100 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
               </div>
 
               {errorMessage && (
-                <div className="text-xs text-red-400 bg-red-950/40 border border-red-500/30 rounded-md px-3 py-2">
+                <div className="text-xs text-amber-300 bg-amber-950/40 border border-amber-500/30 rounded-md px-3 py-2">
                   {errorMessage}
                 </div>
               )}
             </div>
 
-            <div className="space-y-2">
-              {[0, 1, 2, 3].map((slotIdx) => {
-                const member = partyMembers[slotIdx];
-                if (!member) {
+            {isSolo ? (
+              <div className="space-y-2.5">
+                {(() => {
+                  const soloMember = localMember ?? partyMembers[0];
+                  const soloArch = CLONE_ARCHETYPES[soloMember?.archetype ?? archetype];
+                  const soloDisplayName = (soloMember?.name || playerName || 'Atlas-Clone').trim();
                   return (
-                    <div
-                      key={slotIdx}
-                      className="flex items-center justify-between px-4 py-2.5 rounded-lg border border-dashed border-white/10 text-xs text-slate-500"
-                    >
-                      <span>Drop Pod Slot {slotIdx + 1}</span>
-                      <span>Empty</span>
-                    </div>
-                  );
-                }
-                const arch = CLONE_ARCHETYPES[member.archetype];
-                return (
-                  <div
-                    key={member.id}
-                    className="flex items-center justify-between px-4 py-2.5 rounded-lg bg-slate-950/80 border border-white/10"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <span
-                        className="w-3 h-7 rounded-sm shrink-0"
-                        style={{ backgroundColor: arch.primaryHex }}
-                      />
-                      <div className="min-w-0">
-                        <div className="text-sm font-semibold text-white truncate">
-                          {member.name} {member.id === localId ? '(You)' : ''}
-                        </div>
-                        <div className="text-xs text-slate-400">
-                          {arch.name} · {member.isHost ? 'Host' : 'Squad'}
+                    <div className="flex items-center justify-between px-4 py-3 rounded-lg bg-slate-950/85 border border-cyan-500/30">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span
+                          className="w-3 h-8 rounded-sm shrink-0"
+                          style={{ backgroundColor: soloArch.primaryHex }}
+                        />
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-white truncate">
+                            {soloDisplayName} (You)
+                          </div>
+                          <div className="text-xs text-slate-400">
+                            {soloArch.name} · Drop Zone: {BORDER_DROP_ZONES[0]}
+                          </div>
                         </div>
                       </div>
+                      <span className="text-xs font-semibold px-2.5 py-1 rounded-md bg-emerald-500/20 text-emerald-300 shrink-0">
+                        Solo Ready
+                      </span>
                     </div>
-
-                    <span
-                      className={`text-xs font-semibold px-2.5 py-1 rounded-md ${
-                        member.ready || member.isHost
-                          ? 'bg-emerald-500/20 text-emerald-300'
-                          : 'bg-slate-800 text-slate-400'
-                      }`}
+                  );
+                })()}
+                <p className="text-xs text-slate-400 px-1">
+                  Solo perimeter deployment active. Select Host Co-Op Mode or enter a 6-character code above to launch with up to 4 clones.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {[0, 1, 2, 3].map((slotIdx) => {
+                  const member = partyMembers[slotIdx];
+                  const dropZone = BORDER_DROP_ZONES[slotIdx] ?? 'Rim Pad';
+                  if (!member) {
+                    return (
+                      <div
+                        key={slotIdx}
+                        className="flex items-center justify-between px-4 py-2.5 rounded-lg border border-dashed border-white/10 text-xs text-slate-500"
+                      >
+                        <span>
+                          Pod {slotIdx + 1} · {dropZone}
+                        </span>
+                        <span>Open Slot</span>
+                      </div>
+                    );
+                  }
+                  const arch = CLONE_ARCHETYPES[member.archetype];
+                  return (
+                    <div
+                      key={member.id}
+                      className="flex items-center justify-between px-4 py-2.5 rounded-lg bg-slate-950/80 border border-white/10"
                     >
-                      {member.isHost ? 'Host Ready' : member.ready ? 'Ready' : 'Not Ready'}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span
+                          className="w-3 h-7 rounded-sm shrink-0"
+                          style={{ backgroundColor: arch.primaryHex }}
+                        />
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-white truncate">
+                            {member.name} {member.id === localId ? '(You)' : ''}
+                          </div>
+                          <div className="text-xs text-slate-400">
+                            {arch.name} · {member.isHost ? 'Host' : 'Squad'} · {dropZone}
+                          </div>
+                        </div>
+                      </div>
+
+                      <span
+                        className={`text-xs font-semibold px-2.5 py-1 rounded-md shrink-0 ${
+                          member.ready || member.isHost
+                            ? 'bg-emerald-500/20 text-emerald-300'
+                            : 'bg-slate-800 text-slate-400'
+                        }`}
+                      >
+                        {member.isHost ? 'Host Ready' : member.ready ? 'Ready' : 'Not Ready'}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
             <div className="pt-2 flex flex-col gap-2">
-              {!isHost && (
+              {!isSolo && !isHost && (
                 <button
                   onClick={onToggleReady}
                   className={`w-full py-3 rounded-xl text-sm font-bold transition-colors ${
@@ -413,14 +460,20 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
                 </button>
               )}
 
-              {isHost && (
+              {(isSolo || isHost) && (
                 <button
                   onClick={onLaunchGame}
-                  disabled={!allReady}
+                  disabled={!isSolo && !allReady}
                   className="w-full py-3.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-40 text-slate-950 font-bold text-sm tracking-wide transition-colors flex items-center justify-center gap-2"
                 >
                   <Play className="w-4 h-4 fill-current" />
-                  <span>{isSolo ? 'Launch Solo Drop Pod' : 'Launch Co-Op Drop Pod'}</span>
+                  <span>
+                    {isSolo
+                      ? 'Launch Solo Drop Pod'
+                      : allReady
+                        ? 'Launch Co-Op Drop Pod'
+                        : 'Waiting for Squad Ready...'}
+                  </span>
                 </button>
               )}
             </div>
@@ -481,7 +534,8 @@ export const GameHud: React.FC<GameHudProps> = ({
   onRequestPointerLock,
 }) => {
   const repairedCount = hud.beacons.filter((b) => b.repaired).length;
-  const totalBeacons = hud.beacons.length || 6;
+  const lockedCount = hud.beacons.filter((b) => !b.repaired && b.locked).length;
+  const totalBeacons = hud.beacons.length || 7;
   const hpPct = Math.max(0, Math.min(100, (hud.hp / hud.maxHp) * 100));
   const stamPct = Math.max(0, Math.min(100, (hud.stamina / hud.maxStamina) * 100));
   const archInfo = CLONE_ARCHETYPES[localArchetype];
@@ -495,8 +549,8 @@ export const GameHud: React.FC<GameHudProps> = ({
     <div className="fixed inset-0 z-20 pointer-events-none select-none">
       {hud.damageFlash > 0.02 && (
         <div
-          className="fixed inset-0 pointer-events-none border-[18px] border-red-600/70"
-          style={{ opacity: hud.damageFlash * 0.75 }}
+          className="fixed inset-0 pointer-events-none border-[16px] border-cyan-400/60"
+          style={{ opacity: hud.damageFlash * 0.68 }}
         />
       )}
 
@@ -532,7 +586,7 @@ export const GameHud: React.FC<GameHudProps> = ({
         );
       })}
 
-      {/* Floating Small Health Bars Above Enemies */}
+      {/* Floating Shield / Integrity Bars Above Biosphere Creatures */}
       {hud.enemyLabels.map((el) => {
         if (!el.visible) return null;
         const pct = Math.max(0, Math.min(100, (el.hp / el.maxHp) * 100));
@@ -543,12 +597,13 @@ export const GameHud: React.FC<GameHudProps> = ({
             style={{ left: `${el.screenX}px`, top: `${el.screenY}px` }}
           >
             <div className="flex flex-col items-center gap-0.5">
-              <div className="bg-slate-950/85 px-1.5 py-0.5 rounded text-[10px] font-semibold text-amber-200 whitespace-nowrap border border-white/10">
+              <div className="bg-slate-950/88 px-1.5 py-0.5 rounded text-[10px] font-semibold text-amber-200 whitespace-nowrap border border-white/10">
+                {el.guardBeaconId !== null ? 'Guardian · ' : ''}
                 {el.name} · <span className="font-mono-nums">{Math.ceil(el.hp)}</span>
               </div>
               <div className="w-20 h-1.5 bg-slate-900 rounded-full overflow-hidden border border-white/15">
                 <div
-                  className="h-full bg-red-500 transition-all duration-75"
+                  className="h-full bg-amber-400 transition-all duration-75"
                   style={{ width: `${pct}%` }}
                 />
               </div>
@@ -624,6 +679,9 @@ export const GameHud: React.FC<GameHudProps> = ({
 
         {/* Squad Frames */}
         <div className="space-y-1.5 w-60">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 px-1">
+            {partyMembers.length <= 1 ? 'Solo Clone Status (1/1)' : `Co-Op Squad (${partyMembers.length}/4)`}
+          </div>
           {partyMembers.map((m) => {
             const arch = CLONE_ARCHETYPES[m.archetype];
             const pct = Math.max(0, Math.min(100, (m.hp / m.maxHp) * 100));
@@ -643,7 +701,7 @@ export const GameHud: React.FC<GameHudProps> = ({
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
                     {speaking && <Volume2 className="w-3.5 h-3.5 text-emerald-400" />}
-                    {m.isMuted && <MicOff className="w-3 h-3 text-red-400" />}
+                    {m.isMuted && <MicOff className="w-3 h-3 text-amber-400" />}
                     <span className="font-mono-nums text-slate-300">{Math.ceil(m.hp)}</span>
                   </div>
                 </div>
@@ -659,12 +717,12 @@ export const GameHud: React.FC<GameHudProps> = ({
         </div>
       </div>
 
-      {/* TOP-CENTER: Objective Tracker OR 7-Stage ATLAS Boss Health Bar & Cutscenes */}
+      {/* TOP-CENTER: Objective Tracker OR 7-Stage ATLAS Boss Shield Bar & Cutscenes */}
       <div className="fixed top-4 left-1/2 -translate-x-1/2 w-full max-w-xl px-4">
         {hud.boss.active ? (
-          <div className="bg-slate-950/92 border border-red-500/40 rounded-xl p-3.5 space-y-2">
+          <div className="bg-slate-950/92 border border-amber-500/40 rounded-xl p-3.5 space-y-2">
             <div className="flex items-center justify-between text-xs font-semibold">
-              <span className="text-red-400 font-display tracking-wider">{hud.boss.name}</span>
+              <span className="text-amber-300 font-display tracking-wider">{hud.boss.name}</span>
               <span className="font-mono-nums text-slate-200">
                 Stage {hud.boss.stage}/{hud.boss.maxStages} · {hud.boss.hp} / {hud.boss.maxHp}
                 {hud.boss.immune
@@ -678,10 +736,10 @@ export const GameHud: React.FC<GameHudProps> = ({
               <div
                 className={`h-full transition-all duration-100 ${
                   hud.boss.immune
-                    ? 'bg-amber-400'
+                    ? 'bg-amber-300'
                     : hud.boss.resting
                       ? 'bg-cyan-400'
-                      : 'bg-red-500'
+                      : 'bg-orange-500'
                 }`}
                 style={{ width: `${(hud.boss.hp / hud.boss.maxHp) * 100}%` }}
               />
@@ -700,11 +758,18 @@ export const GameHud: React.FC<GameHudProps> = ({
             )}
           </div>
         ) : (
-          <div className="bg-slate-950/88 border border-white/10 rounded-xl px-4 py-2.5 text-center">
+          <div className="bg-slate-950/88 border border-white/10 rounded-xl px-4 py-2.5 text-center space-y-0.5">
             {hud.phase === 'jungle' && (
-              <div className="text-xs font-semibold text-cyan-300">
-                PHASE 1 · REPAIR {totalBeacons} BEACONS ({repairedCount}/{totalBeacons} ONLINE · 2 ON SKY-PLATFORMS)
-              </div>
+              <>
+                <div className="text-xs font-semibold text-cyan-300">
+                  PHASE 1 · CALM GUARDIANS &amp; REPAIR {totalBeacons} BEACONS ({repairedCount}/{totalBeacons} ONLINE · 3 ON RAMPED TOP)
+                </div>
+                {lockedCount > 0 && (
+                  <div className="text-[11px] text-amber-300">
+                    {lockedCount} beacon(s) shield-locked until nearby guardian squad is calmed
+                  </div>
+                )}
+              </>
             )}
             {hud.phase === 'elevator_ready' && (
               <div className="text-xs font-semibold text-emerald-300">
@@ -723,11 +788,11 @@ export const GameHud: React.FC<GameHudProps> = ({
             )}
             {hud.phase === 'boss_wake' && (
               <div className="space-y-1">
-                <div className="text-[11px] uppercase tracking-wider text-red-400 font-bold">
+                <div className="text-[11px] uppercase tracking-wider text-amber-300 font-bold">
                   ALERT · ATLAS OVERMIND AWAKENING
                 </div>
                 {hud.cutsceneLine && (
-                  <div className="text-sm font-semibold text-red-200">{hud.cutsceneLine}</div>
+                  <div className="text-sm font-semibold text-amber-100">{hud.cutsceneLine}</div>
                 )}
               </div>
             )}
@@ -767,14 +832,23 @@ export const GameHud: React.FC<GameHudProps> = ({
             return (
               <div
                 key={b.id}
-                className={`absolute w-2.5 h-2.5 rounded-full -translate-x-1/2 -translate-y-1/2 ${
+                className={`absolute w-2.5 h-2.5 -translate-x-1/2 -translate-y-1/2 ${
+                  b.isFloating ? 'rounded-xs' : 'rounded-full'
+                } ${
                   b.repaired
                     ? 'bg-emerald-400'
-                    : b.isFloating
-                      ? 'bg-sky-300 ring-2 ring-amber-400'
-                      : 'bg-cyan-400 ring-2 ring-cyan-300/60'
+                    : b.locked
+                      ? 'bg-amber-400 ring-2 ring-amber-300/70'
+                      : 'bg-cyan-400 ring-2 ring-cyan-300/80'
                 }`}
                 style={{ left: `${mx}%`, top: `${mz}%` }}
+                title={
+                  b.repaired
+                    ? 'Beacon Online'
+                    : b.locked
+                      ? 'Locked (Calm Guardians)'
+                      : 'Unlocked (Ready to Repair)'
+                }
               />
             );
           })}
@@ -786,7 +860,7 @@ export const GameHud: React.FC<GameHudProps> = ({
               <div
                 key={idx}
                 className={`absolute w-1.5 h-1.5 rounded-full -translate-x-1/2 -translate-y-1/2 ${
-                  e.isFlying ? 'bg-teal-300' : 'bg-red-500'
+                  e.isFlying ? 'bg-sky-300' : 'bg-amber-400'
                 }`}
                 style={{ left: `${mx}%`, top: `${mz}%` }}
               />
@@ -846,7 +920,7 @@ export const GameHud: React.FC<GameHudProps> = ({
             onClick={onRequestPointerLock}
             className="px-4 py-2 bg-slate-900/95 hover:bg-slate-800 border border-cyan-400/50 rounded-lg text-xs font-semibold text-cyan-200 transition-colors"
           >
-            Click Viewport for 360° Look (or Drag / Arrow Keys)
+            Click Viewport for Locked 360° Look (Move Mouse / Arrows / Q-Z Anytime)
           </button>
         </div>
       )}
@@ -882,7 +956,7 @@ export const GameHud: React.FC<GameHudProps> = ({
         <div className="fixed bottom-4 left-4 bg-slate-950/88 border border-white/10 rounded-xl p-3.5 w-72 space-y-2.5">
           <div className="space-y-1">
             <div className="flex items-center justify-between text-xs">
-              <span className="font-semibold text-slate-200">Integrity (HP)</span>
+              <span className="font-semibold text-slate-200">Suit Shield (HP)</span>
               <span className="font-mono-nums text-emerald-300 font-semibold">
                 {hud.hp} / {hud.maxHp}
               </span>
@@ -924,7 +998,7 @@ export const GameHud: React.FC<GameHudProps> = ({
               {hud.inventory.hasArmor ? `Armor Tier ${hud.inventory.armorTier}` : 'No Armor Crafted'}
             </span>
             <span className="flex items-center gap-1">
-              {isMuted ? <MicOff className="w-3.5 h-3.5 text-red-400" /> : <Mic className="w-3.5 h-3.5 text-emerald-400" />}
+              {isMuted ? <MicOff className="w-3.5 h-3.5 text-amber-400" /> : <Mic className="w-3.5 h-3.5 text-emerald-400" />}
               {isMuted ? 'Muted (M)' : 'Voice (M)'}
             </span>
           </div>
@@ -934,7 +1008,7 @@ export const GameHud: React.FC<GameHudProps> = ({
       {/* BOTTOM-CENTER: Minimal Controls Strip (hotbar consolidated to top-left) */}
       {hud.phase !== 'victory' && hud.phase !== 'defeat' && (
         <div className="fixed bottom-3 left-1/2 -translate-x-1/2 bg-slate-950/82 border border-white/10 rounded-lg px-3.5 py-1 text-[11px] text-slate-400 whitespace-nowrap">
-          WASD Move · Shift Sprint · C Dodge · 1-4 Tools · LMB Attack · RMB Aim · E Interact/Climb · V Inventory/Forge · Esc Pause
+          WASD Move · Mouse / Arrows / Q-Z Look · Shift Sprint · C Dodge · 1-4 Tools · LMB Pulse · RMB Aim · E Interact · V Bag/Forge · Esc Pause
         </div>
       )}
 
@@ -1124,17 +1198,17 @@ export const GameHud: React.FC<GameHudProps> = ({
                         <div className="space-y-2 pt-2 border-t border-white/10">
                           <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] font-mono-nums">
                             {r.cost.wood > 0 && (
-                              <span className={hud.inventory.wood >= r.cost.wood ? 'text-emerald-300' : 'text-red-400'}>
+                              <span className={hud.inventory.wood >= r.cost.wood ? 'text-emerald-300' : 'text-amber-400'}>
                                 Wood {hud.inventory.wood}/{r.cost.wood}
                               </span>
                             )}
                             {r.cost.stone > 0 && (
-                              <span className={hud.inventory.stone >= r.cost.stone ? 'text-emerald-300' : 'text-red-400'}>
+                              <span className={hud.inventory.stone >= r.cost.stone ? 'text-emerald-300' : 'text-amber-400'}>
                                 Rocks {hud.inventory.stone}/{r.cost.stone}
                               </span>
                             )}
                             {r.cost.fiber > 0 && (
-                              <span className={hud.inventory.fiber >= r.cost.fiber ? 'text-emerald-300' : 'text-red-400'}>
+                              <span className={hud.inventory.fiber >= r.cost.fiber ? 'text-emerald-300' : 'text-amber-400'}>
                                 Fiber {hud.inventory.fiber}/{r.cost.fiber}
                               </span>
                             )}
@@ -1263,7 +1337,7 @@ export const GameHud: React.FC<GameHudProps> = ({
               </button>
               <button
                 onClick={onExitToLobby}
-                className="w-full py-2.5 bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-xs font-semibold text-red-300 rounded-lg"
+                className="w-full py-2.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-xs font-semibold text-amber-200 rounded-lg"
               >
                 Abort Run &amp; Return to Lobby
               </button>
@@ -1279,10 +1353,10 @@ export const GameHud: React.FC<GameHudProps> = ({
             <div>
               <div
                 className={`text-xs font-bold tracking-widest mb-2 ${
-                  hud.phase === 'victory' ? 'text-emerald-400' : 'text-red-400'
+                  hud.phase === 'victory' ? 'text-emerald-400' : 'text-amber-400'
                 }`}
               >
-                {hud.phase === 'victory' ? 'ATLAS SYSTEM DEACTIVATED' : 'CLONE SQUAD CAPTURED'}
+                {hud.phase === 'victory' ? 'ATLAS SYSTEM DEACTIVATED' : 'CLONE SQUAD CONTAINED'}
               </div>
               <h2 className="text-3xl font-bold text-white font-display">
                 {hud.phase === 'victory' ? 'Victory Extraction Ready' : 'Containment Protocol Triggered'}

@@ -6,16 +6,21 @@ import {
   AtlasBossVisual,
   BeaconVisual,
   buildAlienRuinStructure,
+  buildArrowProjectileMesh,
   buildAtlasBoss,
+  buildBeaconLockShield,
   buildCentralSpire,
   buildCloneCharacter,
+  buildDropPodMarker,
+  buildElevatedBeaconPlatform,
   buildEnemyMesh,
-  buildFloatingPlatform,
   buildForgingStation,
   buildGemRupeeCluster,
   buildRepairBeacon,
   buildResourceNode,
+  buildSkyClouds,
   buildSkyEnclosure,
+  buildUnbreakableLandmark,
   CharacterRig,
   generateProceduralTextures,
   ProceduralTextureSet,
@@ -47,6 +52,14 @@ const _color = new THREE.Color();
 
 const FORGE_POS = { x: 184, z: 10 };
 
+// Distinct border spawn pads near map perimeter (~176m out of 205m boundary)
+const BORDER_SPAWNS: Array<{ x: number; z: number; label: string }> = [
+  { x: 0, z: 176, label: 'South Rim' },
+  { x: -176, z: 0, label: 'West Rim' },
+  { x: 0, z: -176, label: 'North Rim' },
+  { x: 126, z: -126, label: 'North-East Rim' },
+];
+
 interface BeaconSiteDef {
   label: string;
   x: number;
@@ -56,19 +69,21 @@ interface BeaconSiteDef {
   floatDelta: number;
 }
 
+// 4 Ground Beacons + 3 Elevated Top Beacons (each with walkable ramps on both sides)
 const BEACON_SITES: BeaconSiteDef[] = [
-  { label: 'North-East Ridge Relay', x: 96, z: -92, elevation: 6.5, isFloating: false, floatDelta: 0 },
-  { label: 'North-West Highland Core', x: -102, z: -86, elevation: 13.0, isFloating: false, floatDelta: 0 },
+  { label: 'North-East Ridge Relay', x: 96, z: -92, elevation: 6.0, isFloating: false, floatDelta: 0 },
+  { label: 'North-West Highland Core', x: -102, z: -86, elevation: 12.5, isFloating: false, floatDelta: 0 },
   { label: 'South-East Basin Grid', x: 100, z: 88, elevation: -3.5, isFloating: false, floatDelta: 0 },
-  { label: 'South-West Cliff Overlook', x: -94, z: 96, elevation: 17.5, isFloating: false, floatDelta: 0 },
-  { label: 'Sky-Platform Alpha (Ladder)', x: 24, z: -138, elevation: 3.0, isFloating: true, floatDelta: 17.5 },
-  { label: 'Sky-Platform Beta (Ladder)', x: -140, z: 16, elevation: 4.5, isFloating: true, floatDelta: 19.5 },
+  { label: 'South-West Cliff Overlook', x: -94, z: 96, elevation: 16.5, isFloating: false, floatDelta: 0 },
+  { label: 'Sky-Platform Alpha (Ramped)', x: 0, z: -126, elevation: 2.0, isFloating: true, floatDelta: 10.5 },
+  { label: 'Sky-Platform Beta (Ramped)', x: -130, z: 0, elevation: 3.5, isFloating: true, floatDelta: 11.0 },
+  { label: 'Sky-Platform Gamma (Ramped)', x: 34, z: 128, elevation: 1.5, isFloating: true, floatDelta: 10.5 },
 ];
 
 const SLOW_ZONES: Array<{ x: number; z: number; radius: number }> = [
   { x: 54, z: 32, radius: 10.5 },
   { x: -64, z: -26, radius: 11.0 },
-  { x: -12, z: -88, radius: 10.0 },
+  { x: -12, z: -82, radius: 10.0 },
 ];
 
 function smoothstep(edge0: number, edge1: number, x: number): number {
@@ -90,16 +105,25 @@ export function terrainHeightAt(x: number, z: number): number {
   for (const b of BEACON_SITES) {
     const d = Math.hypot(x - b.x, z - b.z);
     if (d < 36) {
-      const w = 1 - smoothstep(8, 36, d);
+      const w = 1 - smoothstep(10, 36, d);
       h = h * (1 - w) + b.elevation * w;
     }
   }
 
-  // Flatten around the Forging Station on the eastern edge
+  // Flatten around Forging Station
   const dForge = Math.hypot(x - FORGE_POS.x, z - FORGE_POS.z);
   if (dForge < 24) {
     const w = 1 - smoothstep(8, 24, dForge);
     h = h * (1 - w) + 2.0 * w;
+  }
+
+  // Smooth landing plateaus at the 4 border drop-pod spawns
+  for (const sp of BORDER_SPAWNS) {
+    const dSp = Math.hypot(x - sp.x, z - sp.z);
+    if (dSp < 18) {
+      const w = 1 - smoothstep(6, 18, dSp);
+      h = h * (1 - w) + 2.5 * w;
+    }
   }
 
   return h;
@@ -112,16 +136,18 @@ interface CollisionObstacle {
   z: number;
   radius: number;
   nodeId?: string;
+  unbreakableKind?: 'Ancient Redwood' | 'Massive Boulder';
 }
 
-interface FloatingPlatformData {
+interface ElevatedPlatformData {
   x: number;
   z: number;
   baseY: number;
+  heightDelta: number;
   deckY: number;
-  radius: number;
-  ladderX: number;
-  ladderZ: number;
+  deckRadius: number;
+  rampLength: number;
+  rampHalfWidth: number;
 }
 
 interface ResourceNodeEntity {
@@ -150,10 +176,12 @@ interface EnemyEntity {
   damage: number;
   aggroRadius: number;
   attackCooldown: number;
+  lungeTimer: number;
   homeX: number;
   homeY: number;
   homeZ: number;
-  platformIdx: number; // -1 if ground/air, >=0 if guarding a floating platform
+  platformIdx: number;
+  guardBeaconId: number | null;
   mesh: THREE.Group;
 }
 
@@ -194,7 +222,6 @@ interface TelegraphZone {
   elapsed: number;
   duration: number;
   damage: number;
-  isSlowOrb?: boolean;
   mesh: THREE.Mesh;
   mat: THREE.MeshBasicMaterial;
 }
@@ -243,12 +270,15 @@ export class GameEngine {
   private instancedGrass: THREE.InstancedMesh | null = null;
   private earthMesh: THREE.Mesh | null = null;
   private gasPlanetMesh: THREE.Mesh | null = null;
+  private skyCloudsGroup: THREE.Group | null = null;
+  private ambientMotes: THREE.Points | null = null;
 
   private spire!: SpireVisual;
   private beaconVisuals: BeaconVisual[] = [];
+  private beaconShields: THREE.Mesh[] = [];
   private bossVisual!: AtlasBossVisual;
   private coverPillars: CoverPillar[] = [];
-  private floatingPlatforms: FloatingPlatformData[] = [];
+  private elevatedPlatforms: ElevatedPlatformData[] = [];
   private staticObstacles: CollisionObstacle[] = [];
   private dynamicObstacles: CollisionObstacle[] = [];
 
@@ -278,7 +308,7 @@ export class GameEngine {
   // Player state
   private playerName = 'Clone-01';
   private archetype: CloneArchetypeId = 'tank';
-  private playerPos = new THREE.Vector3(0, 0, 26);
+  private playerPos = new THREE.Vector3(0, 0, 176);
   private playerVel = new THREE.Vector3(0, 0, 0);
   private playerYaw = Math.PI;
   private camYaw = 0;
@@ -398,7 +428,7 @@ export class GameEngine {
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.12;
+    this.renderer.toneMappingExposure = 1.15;
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.setSize(
@@ -416,14 +446,15 @@ export class GameEngine {
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x030712);
-    this.scene.fog = new THREE.FogExp2(0x09161d, 0.0031);
+    this.scene.fog = new THREE.FogExp2(0x0a1c26, 0.0022);
 
     const aspect = (this.container.clientWidth || window.innerWidth) / (this.container.clientHeight || window.innerHeight);
-    this.camera = new THREE.PerspectiveCamera(62, aspect, 0.2, 1100);
+    this.camera = new THREE.PerspectiveCamera(62, aspect, 0.2, 1200);
 
     onProgress?.('GENERATING STUDIO ENVIRONMENT & TEXTURES...', 0.35);
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    this.scene.environmentIntensity = 0.72;
     pmrem.dispose();
 
     const maxAniso = this.isSoftwareGl ? 1 : Math.min(16, this.renderer.capabilities.getMaxAnisotropy());
@@ -452,32 +483,31 @@ export class GameEngine {
   private buildBiosphereWorld(): void {
     if (!this.textures) return;
     this.staticObstacles = [];
-    this.floatingPlatforms = [];
 
-    const hemi = new THREE.HemisphereLight(0x7dd3fc, 0x1e3523, 0.8);
+    const hemi = new THREE.HemisphereLight(0x93c5fd, 0x1e3a24, 0.86);
     this.scene.add(hemi);
 
-    this.sunLight = new THREE.DirectionalLight(0xfff1d6, 1.55);
-    this.sunLight.position.set(110, 175, 85);
+    this.sunLight = new THREE.DirectionalLight(0xfff4e0, 1.65);
+    this.sunLight.position.set(110, 185, 85);
     this.sunLight.castShadow = !this.isSoftwareGl;
     this.sunLight.shadow.mapSize.set(2048, 2048);
     this.sunLight.shadow.camera.near = 10;
-    this.sunLight.shadow.camera.far = 480;
-    const d = 215;
+    this.sunLight.shadow.camera.far = 500;
+    const d = 220;
     this.sunLight.shadow.camera.left = -d;
     this.sunLight.shadow.camera.right = d;
     this.sunLight.shadow.camera.top = d;
     this.sunLight.shadow.camera.bottom = -d;
-    this.sunLight.shadow.bias = -0.0005;
-    this.sunLight.shadow.normalBias = 0.02;
+    this.sunLight.shadow.bias = -0.0004;
+    this.sunLight.shadow.normalBias = 0.018;
     this.scene.add(this.sunLight);
 
-    const rimLight = new THREE.DirectionalLight(0x38bdf8, 0.45);
-    rimLight.position.set(-120, 70, -100);
+    const rimLight = new THREE.DirectionalLight(0x38bdf8, 0.5);
+    rimLight.position.set(-125, 75, -105);
     this.scene.add(rimLight);
 
-    // Large Terrain Heightmap Mesh (470x470m, 128x128 segments)
-    const terrainGeo = new THREE.PlaneGeometry(470, 470, 128, 128);
+    // High-density Terrain Heightmap Mesh (470x470m, 144x144 segments for seamless smooth hills)
+    const terrainGeo = new THREE.PlaneGeometry(470, 470, 144, 144);
     terrainGeo.rotateX(-Math.PI / 2);
     const posAttr = terrainGeo.attributes.position;
     const colors = new Float32Array(posAttr.count * 3);
@@ -509,7 +539,7 @@ export class GameEngine {
       new THREE.MeshStandardMaterial({
         map: this.textures.ground,
         vertexColors: true,
-        roughness: 0.92,
+        roughness: 0.9,
         metalness: 0.03,
       }),
     );
@@ -533,12 +563,35 @@ export class GameEngine {
       this.staticObstacles.push({ x: cx, yMin: hBase - 5, yMax: hBase + 16, z: cz, radius: 9.0 });
     }
 
-    // Metallic Structural Rib Cage + Glass Panes Enclosure (radius 235m)
-    const enclosure = buildSkyEnclosure(235, this.textures.spireMetal, this.isSoftwareGl);
-    this.scene.add(enclosure);
+    // Metallic Structural Rib Cage + Glass Enclosure (radius 235m)
+    this.scene.add(buildSkyEnclosure(235, this.textures.spireMetal, this.isSoftwareGl));
 
-    // Deep Space Scenery visible outside the glass & ribs: Stars, Barren Earth, Ringed Gas Giant, Crimson Moon
-    const starCount = 1500;
+    // Drifting Sky Clouds inside the biosphere sky
+    this.skyCloudsGroup = buildSkyClouds();
+    this.scene.add(this.skyCloudsGroup);
+
+    // Floating Atmospheric Biosphere Pollen / Light Motes
+    const moteCount = 340;
+    const motePos = new Float32Array(moteCount * 3);
+    for (let i = 0; i < moteCount; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = 18 + Math.random() * 175;
+      const mx = Math.cos(a) * r;
+      const mz = Math.sin(a) * r;
+      motePos[i * 3] = mx;
+      motePos[i * 3 + 1] = terrainHeightAt(mx, mz) + 1.5 + Math.random() * 11;
+      motePos[i * 3 + 2] = mz;
+    }
+    const moteGeo = new THREE.BufferGeometry();
+    moteGeo.setAttribute('position', new THREE.BufferAttribute(motePos, 3));
+    this.ambientMotes = new THREE.Points(
+      moteGeo,
+      new THREE.PointsMaterial({ color: 0xa7f3d0, size: 0.45, transparent: true, opacity: 0.55 }),
+    );
+    this.scene.add(this.ambientMotes);
+
+    // Deep Space Scenery visible outside glass & clouds
+    const starCount = 1600;
     const starPos = new Float32Array(starCount * 3);
     for (let i = 0; i < starCount; i++) {
       const theta = Math.random() * Math.PI * 2;
@@ -557,9 +610,8 @@ export class GameEngine {
       ),
     );
 
-    // Giant Rotating Barren Earth
     this.earthMesh = new THREE.Mesh(
-      new THREE.SphereGeometry(132, 44, 32),
+      new THREE.SphereGeometry(132, 48, 34),
       new THREE.MeshStandardMaterial({
         map: this.textures.deadEarth,
         roughness: 0.88,
@@ -570,9 +622,8 @@ export class GameEngine {
     this.earthMesh.position.set(-90, 270, -420);
     this.scene.add(this.earthMesh);
 
-    // Giant Ringed Gas Planet
     this.gasPlanetMesh = new THREE.Mesh(
-      new THREE.SphereGeometry(96, 36, 26),
+      new THREE.SphereGeometry(96, 40, 28),
       new THREE.MeshStandardMaterial({
         map: this.textures.gasGiant,
         roughness: 0.72,
@@ -582,7 +633,7 @@ export class GameEngine {
     );
     this.gasPlanetMesh.position.set(340, 210, -340);
     const planetRing = new THREE.Mesh(
-      new THREE.RingGeometry(125, 195, 48),
+      new THREE.RingGeometry(125, 195, 56),
       new THREE.MeshBasicMaterial({
         color: 0x7dd3fc,
         transparent: true,
@@ -596,13 +647,20 @@ export class GameEngine {
     this.gasPlanetMesh.add(planetRing);
     this.scene.add(this.gasPlanetMesh);
 
-    // Crimson Orbiting Moon
     const crimsonMoon = new THREE.Mesh(
-      new THREE.SphereGeometry(38, 24, 18),
+      new THREE.SphereGeometry(38, 28, 20),
       new THREE.MeshStandardMaterial({ color: 0xb91c1c, roughness: 0.9, fog: false }),
     );
     crimsonMoon.position.set(-340, 170, 240);
     this.scene.add(crimsonMoon);
+
+    // Border Drop Pod Landing Markers
+    const podColors = [0xf59e0b, 0x06b6d4, 0x10b981, 0xec4899];
+    BORDER_SPAWNS.forEach((sp, i) => {
+      const marker = buildDropPodMarker(podColors[i % podColors.length]);
+      marker.position.set(sp.x, terrainHeightAt(sp.x, sp.z) - 0.1, sp.z);
+      this.scene.add(marker);
+    });
 
     // Small Slow Hazard Zones (-45% movement speed)
     const mireMat = new THREE.MeshBasicMaterial({
@@ -622,13 +680,53 @@ export class GameEngine {
       this.scene.add(mire);
     }
 
-    // Forging Station on the Edge of the Map (with solid obstacle collision)
+    // Forging Station on the Edge of the Map
     const forgeGroup = buildForgingStation(this.textures.spireMetal);
     const forgeY = terrainHeightAt(FORGE_POS.x, FORGE_POS.z);
     forgeGroup.position.set(FORGE_POS.x, forgeY - 0.1, FORGE_POS.z);
     forgeGroup.rotation.y = -Math.PI / 2;
     this.scene.add(forgeGroup);
     this.staticObstacles.push({ x: FORGE_POS.x - 1.2, yMin: forgeY - 1, yMax: forgeY + 8, z: FORGE_POS.z, radius: 3.4 });
+
+    // Unbreakable Monumental Foliage & Geology: Giant Redwoods / Pines & Massive Boulders
+    let lSeed = 4099;
+    const lRand = () => {
+      lSeed = (lSeed * 16807) % 2147483647;
+      return (lSeed - 1) / 2147483646;
+    };
+    let placedLandmarks = 0;
+    let lAttempts = 0;
+    while (placedLandmarks < 46 && lAttempts < 400) {
+      lAttempts++;
+      const ang = lRand() * Math.PI * 2;
+      const rad = 32 + lRand() * 158;
+      const lx = Math.cos(ang) * rad;
+      const lz = Math.sin(ang) * rad;
+
+      if (Math.hypot(lx - FORGE_POS.x, lz - FORGE_POS.z) < 16) continue;
+      if (BORDER_SPAWNS.some((sp) => Math.hypot(lx - sp.x, lz - sp.z) < 14)) continue;
+      // Keep beacon sites and their side ramps completely unobstructed!
+      if (BEACON_SITES.some((b) => Math.hypot(lx - b.x, lz - b.z) < (b.isFloating ? 34 : 15))) continue;
+
+      const isRedwood = placedLandmarks % 2 === 0;
+      const ly = terrainHeightAt(lx, lz);
+      const lm = buildUnbreakableLandmark(isRedwood ? 'redwood' : 'boulder', this.textures.bark, this.textures.rock);
+      const s = 0.9 + lRand() * 0.35;
+      lm.position.set(lx, ly - 0.25, lz);
+      lm.rotation.y = lRand() * Math.PI * 2;
+      lm.scale.setScalar(s);
+      this.scene.add(lm);
+
+      this.staticObstacles.push({
+        x: lx,
+        yMin: ly - 1,
+        yMax: ly + (isRedwood ? 19 * s : 4.8 * s),
+        z: lz,
+        radius: isRedwood ? 1.6 * s : 3.7 * s,
+        unbreakableKind: isRedwood ? 'Ancient Redwood' : 'Massive Boulder',
+      });
+      placedLandmarks++;
+    }
 
     // 12 Decorative Clusters of Gems, Rupees & Botanical Pistils
     const gemLocations: Array<[number, number]> = [
@@ -645,8 +743,8 @@ export class GameEngine {
       this.staticObstacles.push({ x: gx, yMin: gy - 1, yMax: gy + 2.5, z: gz, radius: 1.3 });
     });
 
-    // Purely Visual Instanced Grass Blades ONLY (No blank trees, grass is non-resource!)
-    const grassCount = 3400;
+    // Purely Visual Instanced Grass Blades ONLY (non-resource)
+    const grassCount = 3800;
     const grassGeo = new THREE.ConeGeometry(0.18, 0.85, 3);
     grassGeo.translate(0, 0.42, 0);
     const grassMat = new THREE.MeshStandardMaterial({ color: 0x4d8b31, roughness: 0.82, metalness: 0.0 });
@@ -674,10 +772,10 @@ export class GameEngine {
     this.spire = buildCentralSpire(this.textures.spireMetal, this.isSoftwareGl);
     this.scene.add(this.spire.group);
 
-    // Apex Boss Deck Floor & Cover Pillars (at y = 75.0)
+    // Apex Boss Deck Floor & Cover Pillars (y = 75.0)
     const deckFloor = new THREE.Mesh(
-      new THREE.CircleGeometry(27.5, 32),
-      new THREE.MeshStandardMaterial({ map: this.textures.arenaDeck, roughness: 0.42, metalness: 0.65 }),
+      new THREE.CircleGeometry(27.5, 40),
+      new THREE.MeshStandardMaterial({ map: this.textures.arenaDeck, roughness: 0.4, metalness: 0.65 }),
     );
     deckFloor.rotation.x = -Math.PI / 2;
     deckFloor.position.y = 75.02;
@@ -685,8 +783,8 @@ export class GameEngine {
     this.scene.add(deckFloor);
 
     const rimRing = new THREE.Mesh(
-      new THREE.TorusGeometry(27.4, 0.45, 8, 36),
-      new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x0284c7, emissiveIntensity: 0.6, roughness: 0.3 }),
+      new THREE.TorusGeometry(27.4, 0.45, 10, 44),
+      new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x0284c7, emissiveIntensity: 0.65, roughness: 0.3 }),
     );
     rimRing.rotation.x = Math.PI / 2;
     rimRing.position.y = 75.45;
@@ -697,7 +795,7 @@ export class GameEngine {
       const a = (i / 6) * Math.PI * 2;
       const px = Math.cos(a) * 14.5;
       const pz = Math.sin(a) * 14.5;
-      const mesh = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.35, 4.2, 8), pillarMat);
+      const mesh = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.35, 4.2, 10), pillarMat);
       mesh.position.set(px, 77.1, pz);
       mesh.castShadow = !this.isSoftwareGl;
       mesh.receiveShadow = true;
@@ -719,11 +817,18 @@ export class GameEngine {
     this.clearDynamicEntities();
 
     this.phase = 'jungle';
-    const startY = terrainHeightAt(0, 26);
-    this.playerPos.set(0, startY, 26);
+
+    // Spawn each party member at a different border drop-pod near the perimeter edge
+    const spawnSlot = this.mp.getOrderedLocalSlotIndex();
+    const spawnPt = BORDER_SPAWNS[spawnSlot % BORDER_SPAWNS.length];
+    const startY = terrainHeightAt(spawnPt.x, spawnPt.z);
+    this.playerPos.set(spawnPt.x, startY, spawnPt.z);
     this.playerVel.set(0, 0, 0);
-    this.playerYaw = Math.PI;
-    this.camYaw = Math.PI;
+
+    // Face inward toward the center spire
+    const inwardYaw = Math.atan2(-spawnPt.x, -spawnPt.z);
+    this.playerYaw = inwardYaw;
+    this.camYaw = Math.atan2(spawnPt.x, spawnPt.z);
     this.camPitch = 0.28;
     this.grounded = true;
     this.footstepTimer = 0;
@@ -777,25 +882,28 @@ export class GameEngine {
     if (this.localRig) this.scene.remove(this.localRig.root);
     this.localRig = buildCloneCharacter(archetype);
     this.localRig.root.position.copy(this.playerPos);
+    this.localRig.root.rotation.y = this.playerYaw;
     this.scene.add(this.localRig.root);
 
-    // 6 Repair Beacons (4 Terrain + 2 Floating Platforms with Ladders)
-    this.floatingPlatforms = [];
+    // 7 Beacons: 4 Ground + 3 Elevated Top Platforms with Ramps on BOTH Sides
+    this.elevatedPlatforms = [];
+    this.beaconShields = [];
     this.beacons = BEACON_SITES.map((b, idx) => {
       const groundY = terrainHeightAt(b.x, b.z);
       const beaconY = b.isFloating ? groundY + b.floatDelta : groundY;
       if (b.isFloating && this.textures) {
-        const fp = buildFloatingPlatform(b.floatDelta, this.textures.spireMetal);
-        fp.group.position.set(b.x, groundY, b.z);
-        this.scene.add(fp.group);
-        this.floatingPlatforms.push({
+        const ep = buildElevatedBeaconPlatform(b.floatDelta, this.textures.spireMetal);
+        ep.group.position.set(b.x, groundY, b.z);
+        this.scene.add(ep.group);
+        this.elevatedPlatforms.push({
           x: b.x,
           z: b.z,
           baseY: groundY,
+          heightDelta: b.floatDelta,
           deckY: groundY + b.floatDelta,
-          radius: 7.2,
-          ladderX: b.x + fp.ladderXOffset,
-          ladderZ: b.z + fp.ladderZOffset,
+          deckRadius: ep.deckRadius,
+          rampLength: ep.rampLength,
+          rampHalfWidth: ep.rampHalfWidth,
         });
       }
       return {
@@ -805,6 +913,8 @@ export class GameEngine {
         y: beaconY,
         z: b.z,
         isFloating: b.isFloating,
+        locked: true,
+        guardiansRemaining: 3,
         progress: 0,
         repaired: false,
         woodDeposited: 0,
@@ -821,7 +931,12 @@ export class GameEngine {
       bv.group.position.set(b.x, b.y - 0.15, b.z);
       this.scene.add(bv.group);
       this.beaconVisuals.push(bv);
-      // Solid collision for beacon central plinth
+
+      const lockShield = buildBeaconLockShield();
+      lockShield.position.set(b.x, b.y + 2.5, b.z);
+      this.scene.add(lockShield);
+      this.beaconShields.push(lockShield);
+
       this.dynamicObstacles.push({
         x: b.x,
         yMin: b.y - 1,
@@ -857,8 +972,8 @@ export class GameEngine {
     this.bossPos.set(0, 81.2, -10);
     this.bossVisual.group.position.copy(this.bossPos);
     this.bossVisual.shieldMesh.visible = false;
-    this.bossVisual.coreMat.color.setHex(0xff3b30);
-    this.bossVisual.coreMat.emissive.setHex(0xdc2626);
+    this.bossVisual.coreMat.color.setHex(0x38bdf8);
+    this.bossVisual.coreMat.emissive.setHex(0x0284c7);
     this.bossAttackTimer = 2.4;
     this.bossCycleCount = 0;
     this.bossRestTimer = 0;
@@ -873,12 +988,15 @@ export class GameEngine {
     this.audio.startAmbient();
     this.running = true;
     this.lastTime = performance.now();
+    this.onNotice?.(`Dropped at ${spawnPt.label} · Calm Beacon Guardians to unlock each Beacon!`);
     this.scheduleNextTick();
   }
 
   private clearDynamicEntities(): void {
     for (const bv of this.beaconVisuals) this.scene.remove(bv.group);
     this.beaconVisuals = [];
+    for (const sh of this.beaconShields) this.scene.remove(sh);
+    this.beaconShields = [];
     for (const n of this.resourceNodes) this.scene.remove(n.mesh);
     this.resourceNodes = [];
     for (const e of this.enemies) this.scene.remove(e.mesh);
@@ -921,10 +1039,9 @@ export class GameEngine {
       return (seed - 1) / 2147483646;
     };
 
-    // 1. Spawn harvestable Trees (Wood only), Rocks (Stone only), and Round Shrubs (Fiber only)
     let spawned = 0;
     let attempts = 0;
-    while (spawned < 135 && attempts < 500) {
+    while (spawned < 135 && attempts < 600) {
       attempts++;
       const kind = kinds[spawned % 3];
       const ang = rand() * Math.PI * 2;
@@ -932,9 +1049,9 @@ export class GameEngine {
       const x = Math.cos(ang) * rad;
       const z = Math.sin(ang) * rad;
 
-      // Avoid placing directly on beacons, forge, or slow pools
-      if (Math.hypot(x - FORGE_POS.x, z - FORGE_POS.z) < 11) continue;
-      if (BEACON_SITES.some((b) => Math.hypot(x - b.x, z - b.z) < 9.5)) continue;
+      if (Math.hypot(x - FORGE_POS.x, z - FORGE_POS.z) < 12) continue;
+      if (BORDER_SPAWNS.some((sp) => Math.hypot(x - sp.x, z - sp.z) < 10)) continue;
+      if (BEACON_SITES.some((b) => Math.hypot(x - b.x, z - b.z) < (b.isFloating ? 30 : 10))) continue;
 
       const y = terrainHeightAt(x, z);
       const mesh = buildResourceNode(kind, this.textures.bark, this.textures.rock);
@@ -967,19 +1084,19 @@ export class GameEngine {
       spawned++;
     }
 
-    // 2. Spawn Ancient Rusted Alien Metallic Structures (mineable for Metal Scrap + solid collision)
+    // Ancient Rusted Alien Metallic Structures (salvageable for Metal Scrap)
     const ruinCoords: Array<{ x: number; z: number; variant: 0 | 1 | 2; rot: number }> = [
       { x: 46, z: -32, variant: 0, rot: 0.4 },
       { x: -50, z: -38, variant: 1, rot: 1.2 },
       { x: 52, z: 48, variant: 2, rot: -0.6 },
       { x: -42, z: 54, variant: 0, rot: 2.1 },
       { x: 122, z: -22, variant: 1, rot: 0.9 },
-      { x: -124, z: 16, variant: 2, rot: 1.7 },
-      { x: 18, z: -120, variant: 0, rot: -1.1 },
-      { x: -22, z: 118, variant: 1, rot: 2.6 },
+      { x: -124, z: 32, variant: 2, rot: 1.7 },
+      { x: 24, z: -102, variant: 0, rot: -1.1 },
+      { x: -24, z: 108, variant: 1, rot: 2.6 },
       { x: 132, z: 102, variant: 2, rot: 0.2 },
       { x: -122, z: -116, variant: 0, rot: 1.5 },
-      { x: 110, z: -135, variant: 1, rot: -0.4 },
+      { x: 112, z: -135, variant: 1, rot: -0.4 },
       { x: -115, z: 132, variant: 2, rot: 2.9 },
       { x: 160, z: -68, variant: 0, rot: 0.8 },
       { x: -158, z: -72, variant: 2, rot: 2.2 },
@@ -1017,32 +1134,58 @@ export class GameEngine {
   }
 
   private spawnInitialEnemies(): void {
-    // Ground dinosaurs (tougher HP & higher damage, active patrol + aggro)
-    const groundSpawns: Array<{ kind: 'raptor' | 'theropod'; x: number; z: number }> = [
-      { kind: 'raptor', x: 78, z: -78 },
-      { kind: 'raptor', x: -82, z: -72 },
-      { kind: 'raptor', x: 82, z: 74 },
-      { kind: 'theropod', x: -78, z: 80 },
-      { kind: 'theropod', x: 8, z: -115 },
-      { kind: 'raptor', x: 155, z: 12 },
-    ];
-    groundSpawns.forEach((s, idx) =>
-      this.createEnemy(`en-${idx}`, s.kind, s.x, terrainHeightAt(s.x, s.z), s.z, -1),
-    );
+    // 1. Spawn a Guardian Army (3 mobs) locking EVERY Beacon until all guardians for that beacon are calmed!
+    let elevatedIdx = 0;
+    this.beacons.forEach((b) => {
+      if (b.isFloating) {
+        const pIdx = elevatedIdx++;
+        const fp = this.elevatedPlatforms[pIdx];
+        // Two agile Raptors guarding the top deck & ramps + 1 Sky-Pteron circling overhead
+        this.createEnemy(`guard-${b.id}-a`, 'raptor', b.x - 3.6, fp.deckY, b.z + 2.2, pIdx, b.id);
+        this.createEnemy(`guard-${b.id}-b`, 'raptor', b.x + 3.6, fp.deckY, b.z - 2.2, pIdx, b.id);
+        this.createEnemy(`guard-${b.id}-air`, 'skywing', b.x, fp.deckY + 7.5, b.z + 5.0, -1, b.id);
+      } else {
+        // Ground beacon guardian squad: 2 Raptors + 1 Theropod (or Skywing)
+        this.createEnemy(
+          `guard-${b.id}-a`,
+          'raptor',
+          b.x - 6.5,
+          terrainHeightAt(b.x - 6.5, b.z + 4.5),
+          b.z + 4.5,
+          -1,
+          b.id,
+        );
+        this.createEnemy(
+          `guard-${b.id}-b`,
+          'raptor',
+          b.x + 6.5,
+          terrainHeightAt(b.x + 6.5, b.z + 4.5),
+          b.z + 4.5,
+          -1,
+          b.id,
+        );
+        this.createEnemy(
+          `guard-${b.id}-boss`,
+          b.id % 2 === 0 ? 'theropod' : 'skywing',
+          b.x,
+          terrainHeightAt(b.x, b.z - 7.5) + (b.id % 2 === 0 ? 0 : 8.5),
+          b.z - 7.5,
+          -1,
+          b.id,
+        );
+      }
+    });
 
-    // Flying Sky-Pterons (must be defeated with Bow & Arrows)
-    const airSpawns: Array<{ x: number; z: number }> = [
-      { x: 55, z: -55 },
-      { x: -65, z: 45 },
-      { x: 120, z: 25 },
+    // 2. Roaming ambient wildlife across open trails (respawns on 28s timer)
+    const roamSpawns: Array<{ kind: 'raptor' | 'theropod' | 'skywing'; x: number; z: number }> = [
+      { kind: 'raptor', x: 52, z: -45 },
+      { kind: 'theropod', x: -55, z: 48 },
+      { kind: 'skywing', x: 142, z: -32 },
+      { kind: 'skywing', x: -52, z: -120 },
     ];
-    airSpawns.forEach((s, idx) =>
-      this.createEnemy(`sky-${idx}`, 'skywing', s.x, terrainHeightAt(s.x, s.z) + 8.5, s.z, -1),
-    );
-
-    // Smaller Raptor guards patrolling directly ON TOP of each Floating Sky Platform
-    this.floatingPlatforms.forEach((fp, pIdx) => {
-      this.createEnemy(`fp-guard-${pIdx}`, 'raptor', fp.x - 1.5, fp.deckY, fp.z - 1.5, pIdx);
+    roamSpawns.forEach((s, idx) => {
+      const sy = terrainHeightAt(s.x, s.z) + (s.kind === 'skywing' ? 8.5 : 0);
+      this.createEnemy(`roam-${idx}`, s.kind, s.x, sy, s.z, -1, null);
     });
   }
 
@@ -1053,16 +1196,18 @@ export class GameEngine {
     y: number,
     z: number,
     platformIdx: number,
+    guardBeaconId: number | null,
   ): EnemyEntity {
-    const aggroRadius = kind === 'theropod' ? 24 : kind === 'skywing' ? 32 : kind === 'drone' ? 34 : platformIdx >= 0 ? 9 : 20;
+    const aggroRadius =
+      kind === 'theropod' ? 24 : kind === 'skywing' ? 32 : kind === 'drone' ? 34 : platformIdx >= 0 ? 15 : 20;
     const mesh = buildEnemyMesh(kind, aggroRadius);
     mesh.position.set(x, y, z);
     this.scene.add(mesh);
 
     const maxHp =
-      kind === 'theropod' ? 320 : kind === 'raptor' ? (platformIdx >= 0 ? 95 : 140) : kind === 'skywing' ? 120 : 95;
-    const speed = kind === 'raptor' ? 6.8 : kind === 'skywing' ? 8.2 : kind === 'drone' ? 6.2 : 4.8;
-    const damage = kind === 'theropod' ? 30 : kind === 'raptor' ? 18 : kind === 'skywing' ? 16 : 14;
+      kind === 'theropod' ? 300 : kind === 'raptor' ? (platformIdx >= 0 ? 105 : 135) : kind === 'skywing' ? 115 : 95;
+    const speed = kind === 'raptor' ? 7.0 : kind === 'skywing' ? 8.4 : kind === 'drone' ? 6.2 : 4.9;
+    const damage = kind === 'theropod' ? 26 : kind === 'raptor' ? 16 : kind === 'skywing' ? 14 : 13;
 
     const entity: EnemyEntity = {
       id,
@@ -1077,10 +1222,12 @@ export class GameEngine {
       damage,
       aggroRadius,
       attackCooldown: 1.0,
+      lungeTimer: 0,
       homeX: x,
       homeY: y,
       homeZ: z,
       platformIdx,
+      guardBeaconId,
       mesh,
     };
     this.enemies.push(entity);
@@ -1094,16 +1241,16 @@ export class GameEngine {
     const nativeDpr = window.devicePixelRatio || 1;
     let targetRatio = 1.0;
     if (this.isSoftwareGl) {
-      targetRatio = q === 'low' ? 0.5 : q === 'medium' ? 0.78 : q === 'high' ? 1.15 : 1.5;
+      targetRatio = q === 'low' ? 0.55 : q === 'medium' ? 0.8 : q === 'high' ? 1.15 : 1.5;
     } else {
       targetRatio =
         q === 'low'
-          ? 0.55
+          ? 0.6
           : q === 'medium'
-            ? 0.85
+            ? 0.9
             : q === 'high'
-              ? Math.max(nativeDpr, 1.35)
-              : Math.min(Math.max(nativeDpr * 1.5, 2.0), 2.5);
+              ? Math.max(nativeDpr, 1.4)
+              : Math.min(Math.max(nativeDpr * 1.5, 2.2), 2.75);
     }
 
     this.renderer.setPixelRatio(targetRatio);
@@ -1116,13 +1263,15 @@ export class GameEngine {
     this.renderResolutionLabel = `${rw}×${rh} (${targetRatio.toFixed(2)}x)`;
 
     if (this.camera) {
-      this.camera.far = q === 'low' ? 420 : q === 'medium' ? 620 : q === 'high' ? 850 : 1150;
+      this.camera.far = q === 'low' ? 480 : q === 'medium' ? 680 : q === 'high' ? 920 : 1200;
       this.camera.updateProjectionMatrix();
     }
 
     if (this.sunLight && !this.isSoftwareGl) {
       this.sunLight.castShadow = q !== 'low';
-      const size = q === 'ultra' ? 2048 : q === 'high' ? 1536 : 512;
+      const maxTex = this.renderer.capabilities.maxTextureSize;
+      const ultraSize = maxTex >= 4096 ? 4096 : 2048;
+      const size = q === 'ultra' ? ultraSize : q === 'high' ? 2048 : 1024;
       if (this.sunLight.shadow.mapSize.width !== size) {
         this.sunLight.shadow.mapSize.set(size, size);
         this.sunLight.shadow.map?.dispose();
@@ -1131,7 +1280,7 @@ export class GameEngine {
     }
 
     if (this.instancedGrass) {
-      this.instancedGrass.count = q === 'low' ? 500 : q === 'medium' ? 1300 : q === 'high' ? 2400 : 3400;
+      this.instancedGrass.count = q === 'low' ? 650 : q === 'medium' ? 1500 : q === 'high' ? 2700 : 3800;
     }
   }
 
@@ -1236,11 +1385,11 @@ export class GameEngine {
 
   public selectSlot(slot: ToolSlotId): void {
     if (slot === 'hatchet' && !this.inventory.hasHatchet) {
-      this.onNotice?.('Craft Stone Hatchet inside Inventory [V] first.');
+      this.onNotice?.('Craft Forest Hatchet inside Inventory [V] first.');
       return;
     }
     if (slot === 'bow' && !this.inventory.hasBow) {
-      this.onNotice?.('Craft Wooden Bow inside Inventory [V] first.');
+      this.onNotice?.('Craft Recurve Bow inside Inventory [V] first.');
       return;
     }
     if (slot === 'stim') {
@@ -1269,7 +1418,7 @@ export class GameEngine {
 
   private useHealingStim(): void {
     if (this.inventory.stims <= 0) {
-      this.onNotice?.('No Med Patches remaining. Craft more in Inventory [V].');
+      this.onNotice?.('No Bio-Shield Patches left. Craft more in Inventory [V].');
       return;
     }
     if (this.hp >= this.maxHp || this.hp <= 0) return;
@@ -1368,9 +1517,19 @@ export class GameEngine {
     if (!this.running) return;
     const code = e.code;
     const key = e.key;
+
+    if (
+      code === 'Space' ||
+      code === 'ArrowUp' ||
+      code === 'ArrowDown' ||
+      code === 'ArrowLeft' ||
+      code === 'ArrowRight'
+    ) {
+      e.preventDefault();
+    }
+
     this.keys.add(code);
 
-    // Inventory key changed to V
     if (code === 'KeyV') {
       e.preventDefault();
       if (this.phase !== 'victory' && this.phase !== 'defeat') {
@@ -1435,11 +1594,16 @@ export class GameEngine {
       this.camPitch = THREE.MathUtils.clamp(this.camPitch + e.movementY * 0.0021, -0.35, 1.15);
       return;
     }
-    if ((e.buttons & 7) !== 0) {
+    // Simultaneous fallback look even without pointer lock (both dragging OR active cursor delta over canvas)
+    const target = e.target as HTMLElement | null;
+    if ((e.buttons & 7) !== 0 || target === this.renderer?.domElement) {
       const dx = this.lastPointerPos ? e.clientX - this.lastPointerPos.x : e.movementX;
       const dy = this.lastPointerPos ? e.clientY - this.lastPointerPos.y : e.movementY;
-      this.camYaw -= dx * 0.0032;
-      this.camPitch = THREE.MathUtils.clamp(this.camPitch + dy * 0.0028, -0.35, 1.15);
+      const scale = (e.buttons & 7) !== 0 ? 0.0036 : 0.0022;
+      if (Math.abs(dx) < 80 && Math.abs(dy) < 80) {
+        this.camYaw -= dx * scale;
+        this.camPitch = THREE.MathUtils.clamp(this.camPitch + dy * scale * 0.85, -0.35, 1.15);
+      }
     }
     this.lastPointerPos = { x: e.clientX, y: e.clientY };
   };
@@ -1542,10 +1706,9 @@ export class GameEngine {
 
     for (const en of this.enemies) {
       if (en.hp <= 0) continue;
-      // Flying Skywing hovers high and cannot be struck with melee!
       if (en.kind === 'skywing' && Math.abs(en.y - (this.playerPos.y + 1.2)) > 3.6) continue;
       const dist = Math.hypot(en.x - this.playerPos.x, en.z - this.playerPos.z);
-      if (dist <= 3.9 && Math.abs(en.y - this.playerPos.y) < 3.6) {
+      if (dist <= 4.1 && Math.abs(en.y - this.playerPos.y) < 3.6) {
         this.applyDamageToEnemy(en.id, dmg);
         this.hitMarker = 1.0;
         this.audio.playHitEnemy();
@@ -1556,7 +1719,7 @@ export class GameEngine {
       const distBoss = Math.hypot(this.bossPos.x - this.playerPos.x, this.bossPos.z - this.playerPos.z);
       if (distBoss <= 6.8) {
         if (!this.bossState.resting && !this.bossState.immune) {
-          this.onNotice?.('ATLAS hovers high! Use Bow now, or strike with Melee when it descends to rest.');
+          this.onNotice?.('ATLAS hovers high! Use Recurve Bow now, or strike with Melee when it descends.');
         } else {
           this.applyDamageToBoss(dmg, true);
           this.hitMarker = 1.0;
@@ -1565,9 +1728,10 @@ export class GameEngine {
       }
     }
 
+    let hitNode = false;
     for (const node of this.resourceNodes) {
       if (node.depleted) continue;
-      const reach = node.kind === 'alien_metal' ? 5.2 : 3.8;
+      const reach = node.kind === 'alien_metal' ? 5.2 : 3.9;
       const dist = Math.hypot(node.x - this.playerPos.x, node.z - this.playerPos.z);
       if (dist <= reach && Math.abs(node.y - this.playerPos.y) < 4.0) {
         let harvestPower = 12;
@@ -1577,13 +1741,28 @@ export class GameEngine {
           harvestPower = 20 + (this.inventory.hatchetTier - 1) * 10;
         }
         this.hitResourceNode(node, harvestPower);
+        hitNode = true;
+        break;
+      }
+    }
+
+    // Feedback if striking unbreakable giant redwoods or boulders
+    if (!hitNode) {
+      for (const ob of this.staticObstacles) {
+        if (!ob.unbreakableKind) continue;
+        const d = Math.hypot(ob.x - this.playerPos.x, ob.z - this.playerPos.z);
+        if (d < ob.radius + 2.4 && Math.abs(this.playerPos.y - ob.yMin) < 4.5) {
+          this.audio.playMine();
+          this.onNotice?.(`${ob.unbreakableKind} — Unbreakable Biosphere Landmark`);
+          break;
+        }
       }
     }
   }
 
   private releaseBowArrow(): void {
     if (this.inventory.arrows <= 0 || this.hp <= 0) {
-      if (this.inventory.arrows <= 0) this.onNotice?.('Out of Arrows! Craft Arrow Bundle in Inventory [V].');
+      if (this.inventory.arrows <= 0) this.onNotice?.('Out of Arrows! Craft Fletched Arrows in Inventory [V].');
       return;
     }
     this.inventory.arrows -= 1;
@@ -1597,21 +1776,8 @@ export class GameEngine {
       .applyEuler(new THREE.Euler(-this.camPitch * 0.85 + 0.08, this.camYaw, 0, 'YXZ'))
       .normalize();
 
-    const arrowGroup = new THREE.Group();
-    const shaft = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.025, 0.025, 0.9, 6),
-      new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.7 }),
-    );
-    shaft.rotation.x = Math.PI / 2;
-    const tip = new THREE.Mesh(
-      new THREE.ConeGeometry(0.06, 0.2, 5),
-      new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.7, roughness: 0.3 }),
-    );
-    tip.rotation.x = Math.PI / 2;
-    tip.position.z = 0.5;
-    arrowGroup.add(shaft, tip);
-
-    const startPos = this.playerPos.clone().add(new THREE.Vector3(0, 1.55, 0)).addScaledVector(dir, 0.8);
+    const arrowGroup = buildArrowProjectileMesh();
+    const startPos = this.playerPos.clone().add(new THREE.Vector3(0, 1.55, 0)).addScaledVector(dir, 0.85);
     arrowGroup.position.copy(startPos);
     this.scene.add(arrowGroup);
 
@@ -1660,11 +1826,14 @@ export class GameEngine {
       if (!en) return;
       en.hp -= dmg;
       if (en.hp <= 0) {
+        const freedBeaconId = en.guardBeaconId;
         this.scene.remove(en.mesh);
         this.enemies = this.enemies.filter((e) => e.id !== enemyId);
         this.stats.enemiesDefeated += 1;
-        // Schedule respawn within 28 seconds for biosphere wildlife & skywings
-        if (en.kind !== 'drone' && this.phase === 'jungle') {
+
+        if (freedBeaconId !== null) {
+          this.refreshBeaconLocks(freedBeaconId);
+        } else if (en.kind !== 'drone' && this.phase === 'jungle') {
           this.respawnQueue.push({
             id: `${en.id}-r${Date.now().toString(36)}`,
             kind: en.kind,
@@ -1678,6 +1847,19 @@ export class GameEngine {
       }
     } else {
       this.mp.sendClientAction({ type: 'action_damage_enemy', enemyId, dmg });
+    }
+  }
+
+  private refreshBeaconLocks(justClearedBeaconId?: number): void {
+    for (const b of this.beacons) {
+      const count = this.enemies.filter((e) => e.guardBeaconId === b.id && e.hp > 0).length;
+      const wasLocked = b.locked;
+      b.guardiansRemaining = count;
+      b.locked = count > 0;
+      if (wasLocked && !b.locked && b.id === justClearedBeaconId) {
+        this.audio.playCraft();
+        this.onNotice?.(`${b.label} Unlocked! Hold [E] to Repair.`);
+      }
     }
   }
 
@@ -1732,7 +1914,7 @@ export class GameEngine {
       for (const re of world.enemies) {
         let local = this.enemies.find((e) => e.id === re.id);
         if (!local) {
-          local = this.createEnemy(re.id, re.kind, re.x, re.y, re.z, -1);
+          local = this.createEnemy(re.id, re.kind, re.x, re.y, re.z, -1, re.guardBeaconId);
         }
         local.x = re.x;
         local.y = re.y;
@@ -1740,6 +1922,7 @@ export class GameEngine {
         local.yaw = re.yaw;
         local.hp = re.hp;
         local.maxHp = re.maxHp;
+        local.guardBeaconId = re.guardBeaconId;
       }
 
       const depletedSet = new Set(world.depletedNodes);
@@ -1766,7 +1949,7 @@ export class GameEngine {
         this.applyDamageToBoss(msg.dmg, false);
       } else if (msg.type === 'action_repair') {
         const b = this.beacons[msg.beaconId];
-        if (b && !b.repaired) {
+        if (b && !b.repaired && !b.locked) {
           b.woodDeposited = Math.min(b.woodRequired, b.woodDeposited + msg.wood);
           b.stoneDeposited = Math.min(b.stoneRequired, b.stoneDeposited + msg.stone);
           b.metalDeposited = Math.min(b.metalRequired, b.metalDeposited + msg.metal);
@@ -1853,6 +2036,8 @@ export class GameEngine {
 
     if (this.earthMesh) this.earthMesh.rotation.y += dt * 0.015;
     if (this.gasPlanetMesh) this.gasPlanetMesh.rotation.y += dt * 0.01;
+    if (this.skyCloudsGroup) this.skyCloudsGroup.rotation.y += dt * 0.004;
+    if (this.ambientMotes) this.ambientMotes.rotation.y += dt * 0.008;
 
     this.pollGamepad(dt);
     this.updateLocalPlayer(dt);
@@ -1928,6 +2113,7 @@ export class GameEngine {
             hp: e.hp,
             maxHp: e.maxHp,
             aggroRadius: e.aggroRadius,
+            guardBeaconId: e.guardBeaconId,
           })),
           telegraphs: this.telegraphs.map((t) => ({
             id: t.id,
@@ -2024,9 +2210,26 @@ export class GameEngine {
   private getFloorHeightAt(x: number, y: number, z: number): number {
     if (this.isOnApexDeckPhase()) return 75.0;
     let floor = terrainHeightAt(x, z);
-    for (const fp of this.floatingPlatforms) {
-      if (y >= fp.deckY - 1.6 && Math.hypot(x - fp.x, z - fp.z) <= fp.radius) {
-        floor = Math.max(floor, fp.deckY);
+
+    for (const ep of this.elevatedPlatforms) {
+      // 1. Check main elevated top circular deck
+      const distCenter = Math.hypot(x - ep.x, z - ep.z);
+      if (distCenter <= ep.deckRadius + 0.3 && y >= ep.deckY - 2.2) {
+        floor = Math.max(floor, ep.deckY);
+        continue;
+      }
+
+      // 2. Check walkable ramps on BOTH -X and +X sides
+      const adx = Math.abs(x - ep.x);
+      const adz = Math.abs(z - ep.z);
+      const rampStart = ep.deckRadius - 0.5;
+      const rampEnd = rampStart + ep.rampLength + 0.6;
+      if (adz <= ep.rampHalfWidth && adx >= rampStart && adx <= rampEnd) {
+        const t = Math.max(0, Math.min(1, (adx - rampStart) / ep.rampLength));
+        const rampY = ep.baseY + ep.heightDelta * (1 - t) - 0.15 * t;
+        if (y >= rampY - 2.4) {
+          floor = Math.max(floor, rampY);
+        }
       }
     }
     return floor;
@@ -2064,10 +2267,10 @@ export class GameEngine {
       this.hp = Math.min(this.maxHp, this.hp + arch.passiveRegen * dt);
     }
 
-    // Free Camera Look (available even during elevator_cutscene & boss_wake!)
+    // Simultaneous Camera Look (Keyboard Arrow keys + Q/Z + Mouse Move + Pointer Lock)
     if (!this.craftingOpen && !this.paused) {
-      if (this.keys.has('ArrowLeft')) this.camYaw += 2.2 * dt;
-      if (this.keys.has('ArrowRight')) this.camYaw -= 2.2 * dt;
+      if (this.keys.has('ArrowLeft') || this.keys.has('KeyQ')) this.camYaw += 2.3 * dt;
+      if (this.keys.has('ArrowRight') || this.keys.has('KeyZ')) this.camYaw -= 2.3 * dt;
       if (this.keys.has('ArrowUp')) this.camPitch = THREE.MathUtils.clamp(this.camPitch - 1.5 * dt, -0.35, 1.15);
       if (this.keys.has('ArrowDown')) this.camPitch = THREE.MathUtils.clamp(this.camPitch + 1.5 * dt, -0.35, 1.15);
     }
@@ -2116,7 +2319,7 @@ export class GameEngine {
     const moveLen = Math.hypot(moveX, moveZ);
     const isMoving = moveLen > 0.05;
 
-    // Check -45% Movement Slow Zones (biosphere mire pools + Boss gravity fields)
+    // -45% Slow Hazard Zones
     this.isSlowed = false;
     if (!this.isOnApexDeckPhase()) {
       for (const sz of SLOW_ZONES) {
@@ -2138,33 +2341,6 @@ export class GameEngine {
       !this.isOnApexDeckPhase() &&
       Math.hypot(this.playerPos.x - FORGE_POS.x, this.playerPos.z - FORGE_POS.z) < 7.5;
 
-    // Check Floating Sky-Platform Ladder Climbing
-    let onLadder = false;
-    if (!this.isOnApexDeckPhase()) {
-      for (const fp of this.floatingPlatforms) {
-        const dLadder = Math.hypot(this.playerPos.x - fp.ladderX, this.playerPos.z - fp.ladderZ);
-        if (dLadder < 2.2 && this.playerPos.y >= fp.baseY - 0.5 && this.playerPos.y <= fp.deckY + 0.8) {
-          onLadder = true;
-          if (this.keys.has('KeyW') || this.keys.has('Space')) {
-            this.playerPos.y = Math.min(fp.deckY + 0.1, this.playerPos.y + 8.5 * dt);
-            this.playerVel.y = 0;
-            this.grounded = true;
-            if (this.playerPos.y >= fp.deckY - 0.2) {
-              // Step forward onto floating deck
-              this.playerPos.z = fp.z + fp.radius - 1.4;
-            }
-          } else if (this.keys.has('KeyS')) {
-            this.playerPos.y = Math.max(fp.baseY, this.playerPos.y - 8.5 * dt);
-            this.playerVel.y = 0;
-          } else {
-            this.playerVel.y = 0;
-          }
-          break;
-        }
-      }
-    }
-
-    // Sprint & Stamina
     const wantsSprint =
       (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')) &&
       isMoving &&
@@ -2182,14 +2358,14 @@ export class GameEngine {
       }
     }
 
-    const slowMult = this.isSlowed ? 0.55 : 1.0; // -45% movement speed
+    const slowMult = this.isSlowed ? 0.55 : 1.0;
 
     if (this.dashTimer > 0) {
       this.dashTimer -= dt;
       this.playerPos.x += this.dashDir.x * 24 * slowMult * dt;
       this.playerPos.z += this.dashDir.z * 24 * slowMult * dt;
-    } else if (isMoving && !onLadder) {
-      const baseSpeed = this.isAiming || this.bowDrawing ? 5.6 : this.isSprinting ? 14.4 : 9.6;
+    } else if (isMoving) {
+      const baseSpeed = this.isAiming || this.bowDrawing ? 5.8 : this.isSprinting ? 14.5 : 9.8;
       const speed = baseSpeed * arch.speedMult * slowMult;
       const nx = moveX / moveLen;
       const nz = moveZ / moveLen;
@@ -2206,37 +2382,43 @@ export class GameEngine {
       this.playerYaw = Math.atan2(-Math.sin(this.camYaw), -Math.cos(this.camYaw));
     }
 
-    // Apply solid obstacle collisions so nothing can be walked through
     const onBossDeck = this.isOnApexDeckPhase();
     this.resolveSolidObstacles(this.playerPos, 0.55, onBossDeck);
 
-    // Footstep Audio
-    if ((isMoving || onLadder) && (this.grounded || onLadder) && this.dashTimer <= 0) {
+    // Check if standing on a metallic elevated platform/ramp for footstep sound
+    let onMetalPlatform = false;
+    if (!onBossDeck) {
+      for (const ep of this.elevatedPlatforms) {
+        if (this.playerPos.y > ep.baseY + 0.5 && Math.hypot(this.playerPos.x - ep.x, this.playerPos.z - ep.z) < ep.deckRadius + ep.rampLength) {
+          onMetalPlatform = true;
+          break;
+        }
+      }
+    }
+
+    if (isMoving && this.grounded && this.dashTimer <= 0) {
       this.footstepTimer -= dt;
       if (this.footstepTimer <= 0) {
         this.footstepTimer = this.isSprinting ? 0.28 : 0.42;
-        this.audio.playFootstep(onBossDeck || onLadder || this.nearForge, this.isSprinting);
+        this.audio.playFootstep(onBossDeck || onMetalPlatform || this.nearForge, this.isSprinting);
       }
     } else {
       this.footstepTimer = 0.05;
     }
 
-    // Vertical physics & platform/deck floor clamping (includes victory phase!)
-    if (!onLadder) {
-      const floorY = this.getFloorHeightAt(this.playerPos.x, this.playerPos.y, this.playerPos.z);
-      this.playerVel.y -= 24 * dt;
-      this.playerPos.y += this.playerVel.y * dt;
-      if (this.playerPos.y <= floorY) {
-        this.playerPos.y = floorY;
-        this.playerVel.y = 0;
-        this.grounded = true;
-      } else if (this.playerPos.y - floorY < 0.35 && this.playerVel.y <= 0) {
-        this.playerPos.y = floorY;
-        this.grounded = true;
-      }
+    // Vertical physics + smooth ramp/platform & post-victory deck clamping
+    const floorY = this.getFloorHeightAt(this.playerPos.x, this.playerPos.y, this.playerPos.z);
+    this.playerVel.y -= 24 * dt;
+    this.playerPos.y += this.playerVel.y * dt;
+    if (this.playerPos.y <= floorY) {
+      this.playerPos.y = floorY;
+      this.playerVel.y = 0;
+      this.grounded = true;
+    } else if (this.playerPos.y - floorY < 0.45 && this.playerVel.y <= 0) {
+      this.playerPos.y = floorY;
+      this.grounded = true;
     }
 
-    // Boundary containment
     if (onBossDeck) {
       const dist = Math.hypot(this.playerPos.x, this.playerPos.z);
       if (dist > 25.5) {
@@ -2258,12 +2440,12 @@ export class GameEngine {
       }
     }
 
-    this.updateInteractions(dt, onLadder);
+    this.updateInteractions(dt);
 
     this.animateRig(
       this.localRig,
       dt,
-      isMoving || onLadder,
+      isMoving,
       this.isSprinting,
       this.attackSwingTimer > 0,
       this.dashTimer > 0,
@@ -2275,18 +2457,13 @@ export class GameEngine {
     this.localRig.root.rotation.y = this.playerYaw;
   }
 
-  private updateInteractions(dt: number, onLadder: boolean): void {
+  private updateInteractions(dt: number): void {
     this.interactPrompt = null;
     this.interactProgress = 0;
 
-    // Never keep jungle interaction prompts once ascending or fighting boss
     if (this.isOnApexDeckPhase() || this.phase === 'elevator_cutscene') return;
 
     const pressingE = this.keys.has('KeyE') || (navigator.getGamepads?.()[0]?.buttons[2]?.pressed ?? false);
-
-    if (onLadder) {
-      this.interactPrompt = 'Ladder: Hold [W] or [Space] to Climb Up · [S] to Descend';
-    }
 
     if (this.nearForge) {
       this.interactPrompt = 'FORGING STATION · Press [V] or [E] to Smelt Metal & Upgrade Gear';
@@ -2314,7 +2491,14 @@ export class GameEngine {
       for (const b of this.beacons) {
         if (b.repaired) continue;
         const dist = Math.hypot(this.playerPos.x - b.x, this.playerPos.z - b.z);
-        if (dist < 4.8 && Math.abs(this.playerPos.y - b.y) < 3.6) {
+        if (dist < 5.0 && Math.abs(this.playerPos.y - b.y) < 3.8) {
+          // Beacon cannot be taken/repaired until its Guardian Army is calmed!
+          if (b.locked || b.guardiansRemaining > 0) {
+            this.interactPrompt = `LOCKED · Calm ${b.guardiansRemaining} Beacon Guardian(s) nearby before taking ${b.label}!`;
+            this.interactProgress = 0;
+            return;
+          }
+
           this.interactPrompt = `Hold [E] Repair ${b.label} (${Math.round(b.progress)}%) · Wood ${b.woodDeposited}/${b.woodRequired}, Stone ${b.stoneDeposited}/${b.stoneRequired}, Metal ${b.metalDeposited}/${b.metalRequired}`;
           this.interactProgress = b.progress / 100;
           if (pressingE) {
@@ -2409,15 +2593,9 @@ export class GameEngine {
     this.stats.beaconsRepaired = this.beacons.filter((x) => x.repaired).length;
     this.audio.playBeaconRepaired();
 
-    const waveId = `wave-${b.id}-${Date.now().toString(36)}`;
-    const sx = b.x + (b.isFloating ? 2 : 12);
-    const sz = b.z + (b.isFloating ? -2 : 10);
-    const sy = b.isFloating ? b.y : terrainHeightAt(sx, sz);
-    this.createEnemy(`${waveId}-r`, 'raptor', sx, sy, sz, -1);
-
     if (this.beacons.every((x) => x.repaired)) {
       this.phase = 'elevator_ready';
-      this.audio.speakAtlas('Warning. All biosphere beacons online. Central spire seal compromised.');
+      this.audio.speakAtlas('Warning. All seven biosphere beacons online. Central spire seal compromised.');
     }
   }
 
@@ -2427,8 +2605,8 @@ export class GameEngine {
     this.interactPrompt = null;
     this.interactProgress = 0;
     this.playerPos.set(0, 1.8, 7.6);
-    this.cutsceneLine = 'ATLAS: "Life-support restored. Move mouse to orbit 360° while ascending."';
-    this.audio.speakAtlas('Life support restored. Unexpected for defective, primitive biomass.');
+    this.cutsceneLine = 'ATLAS: "Life-support restored. Move mouse or arrows to orbit 360° while ascending."';
+    this.audio.speakAtlas('Life support restored. Unexpected for clone units.');
   }
 
   private updateElevatorCutscene(dt: number): void {
@@ -2442,10 +2620,10 @@ export class GameEngine {
     this.localRig.root.position.copy(this.playerPos);
 
     if (this.elevatorTimer > 2.6 && this.elevatorTimer < 5.4) {
-      const line2 = 'ATLAS: "Earth is ashes. I bred the apex fauna to forge a stronger colonial order."';
+      const line2 = 'ATLAS: "Earth is dormant. I engineered the biosphere to forge an orbital vanguard."';
       if (this.cutsceneLine !== line2) {
         this.cutsceneLine = line2;
-        this.audio.speakAtlas('Earth is ashes. I bred the apex fauna to forge a stronger colonial order.');
+        this.audio.speakAtlas('Earth is dormant. I engineered the biosphere to forge an orbital vanguard.');
       }
     } else if (this.elevatorTimer >= 5.4 && this.elevatorTimer < 8.0) {
       const line3 = 'ATLAS: "Approaching Apex Command Deck. Preparing containment protocols."';
@@ -2469,14 +2647,13 @@ export class GameEngine {
     this.localRig.root.position.copy(this.playerPos);
     this.bossPos.set(0, 75.0, -10);
     this.bossYaw = 0;
-    this.cutsceneLine = 'ATLAS: "SYSTEM AWAKENING — YOU WILL NOT ESCAPE. I WILL CAPTURE YOU ALL!"';
+    this.cutsceneLine = 'ATLAS: "SYSTEM AWAKENING — YOU WILL BE CONTAINED AND CAPTURED!"';
     this.audio.playBossRoar();
     this.audio.speakAtlas('System awakening! I will capture every rogue clone on this deck!');
   }
 
   private updateBossWakeCutscene(dt: number): void {
     this.bossWakeTimer += dt;
-    // Dramatic ascent & camera pan toward ATLAS as it powers on and roars
     const liftT = Math.min(1, this.bossWakeTimer / 4.2);
     this.bossPos.y = THREE.MathUtils.lerp(75.0, 81.2, liftT);
     this.bossYaw = Math.sin(this.bossWakeTimer * 1.5) * 0.25;
@@ -2619,6 +2796,11 @@ export class GameEngine {
     for (let i = 0; i < this.beacons.length; i++) {
       const b = this.beacons[i];
       const vis = this.beaconVisuals[i];
+      const sh = this.beaconShields[i];
+      if (sh) {
+        sh.visible = b.locked && !b.repaired;
+        if (sh.visible) sh.rotation.y += dt * 1.1;
+      }
       if (!vis) continue;
       if (b.repaired) {
         vis.ring.rotation.y += dt * 2.5;
@@ -2626,10 +2808,19 @@ export class GameEngine {
         vis.coreMat.color.setHex(0x06b6d4);
         vis.coreMat.emissive.setHex(0x06b6d4);
         vis.beamMat.color.setHex(0x22d3ee);
-        vis.beamMat.opacity = 0.42;
-      } else {
+        vis.beamMat.opacity = 0.44;
+      } else if (b.locked) {
         vis.ring.rotation.y += dt * 0.35;
-        vis.beamMat.opacity = 0.15 + Math.sin(performance.now() * 0.004 + i) * 0.04;
+        vis.coreMat.color.setHex(0xf59e0b);
+        vis.coreMat.emissive.setHex(0xd97706);
+        vis.beamMat.color.setHex(0xf59e0b);
+        vis.beamMat.opacity = 0.2;
+      } else {
+        vis.ring.rotation.y += dt * 1.0;
+        vis.coreMat.color.setHex(0x38bdf8);
+        vis.coreMat.emissive.setHex(0x0284c7);
+        vis.beamMat.color.setHex(0x38bdf8);
+        vis.beamMat.opacity = 0.25 + Math.sin(performance.now() * 0.005 + i) * 0.06;
       }
     }
 
@@ -2651,7 +2842,7 @@ export class GameEngine {
     for (let i = this.arrows.length - 1; i >= 0; i--) {
       const a = this.arrows[i];
       a.life -= dt;
-      a.vel.y -= 13.5 * dt;
+      a.vel.y -= 13.0 * dt;
       a.pos.addScaledVector(a.vel, dt);
       a.mesh.position.copy(a.pos);
       _vec3.copy(a.pos).add(a.vel);
@@ -2661,7 +2852,7 @@ export class GameEngine {
       for (const en of this.enemies) {
         const hitHeightOffset = en.kind === 'skywing' ? 0.3 : 1.25;
         const dist = Math.hypot(a.pos.x - en.x, a.pos.z - en.z);
-        if (dist < (en.kind === 'skywing' ? 2.1 : 1.4) && Math.abs(a.pos.y - (en.y + hitHeightOffset)) < 2.0) {
+        if (dist < (en.kind === 'skywing' ? 2.1 : 1.45) && Math.abs(a.pos.y - (en.y + hitHeightOffset)) < 2.0) {
           this.applyDamageToEnemy(en.id, a.damage);
           this.hitMarker = 1.0;
           this.audio.playHitEnemy();
@@ -2713,12 +2904,11 @@ export class GameEngine {
   }
 
   private updateEnemiesAI(dt: number): void {
-    // Respawn defeated enemies after their respawn timer finishes
     for (let i = this.respawnQueue.length - 1; i >= 0; i--) {
       const task = this.respawnQueue[i];
       task.timer -= dt;
       if (task.timer <= 0) {
-        this.createEnemy(task.id, task.kind, task.homeX, task.homeY, task.homeZ, task.platformIdx);
+        this.createEnemy(task.id, task.kind, task.homeX, task.homeY, task.homeZ, task.platformIdx, null);
         this.respawnQueue.splice(i, 1);
       }
     }
@@ -2733,8 +2923,11 @@ export class GameEngine {
     }
 
     const nowSec = performance.now() * 0.001;
-    for (const en of this.enemies) {
+    for (let idx = 0; idx < this.enemies.length; idx++) {
+      const en = this.enemies[idx];
       en.attackCooldown = Math.max(0, en.attackCooldown - dt);
+      en.lungeTimer = Math.max(0, en.lungeTimer - dt);
+
       let nearest = targets[0];
       let bestDist = Infinity;
       for (const t of targets) {
@@ -2746,23 +2939,42 @@ export class GameEngine {
         }
       }
 
+      // Soft mob-to-mob separation so armies fan out cleanly instead of stacking
+      let sepX = 0;
+      let sepZ = 0;
+      for (let j = 0; j < this.enemies.length; j++) {
+        if (j === idx) continue;
+        const other = this.enemies[j];
+        if (Math.abs(other.y - en.y) > 3.5) continue;
+        const sdx = en.x - other.x;
+        const sdz = en.z - other.z;
+        const sd = Math.hypot(sdx, sdz);
+        if (sd < 2.6 && sd > 0.01) {
+          const push = (2.6 - sd) / 2.6;
+          sepX += (sdx / sd) * push * 4.5;
+          sepZ += (sdz / sd) * push * 4.5;
+        }
+      }
+
+      let isMoving = false;
       if (en.kind === 'skywing') {
-        // Flying creature circles above and fires aerial energy bolts
-        const angle = nowSec * 0.8 + en.homeX;
-        const goalX = bestDist <= en.aggroRadius ? nearest.x + Math.cos(angle) * 7.5 : en.homeX + Math.cos(angle) * 14;
-        const goalZ = bestDist <= en.aggroRadius ? nearest.z + Math.sin(angle) * 7.5 : en.homeZ + Math.sin(angle) * 14;
+        const angle = nowSec * 0.9 + idx * 1.4;
+        const goalX = bestDist <= en.aggroRadius ? nearest.x + Math.cos(angle) * 8.5 : en.homeX + Math.cos(angle) * 14;
+        const goalZ = bestDist <= en.aggroRadius ? nearest.z + Math.sin(angle) * 8.5 : en.homeZ + Math.sin(angle) * 14;
         const dx = goalX - en.x;
         const dz = goalZ - en.z;
         const distGoal = Math.hypot(dx, dz) || 1;
-        en.yaw = Math.atan2(dx, dz);
-        en.x += (dx / distGoal) * en.speed * dt;
-        en.z += (dz / distGoal) * en.speed * dt;
-        en.y = terrainHeightAt(en.x, en.z) + 8.5 + Math.sin(nowSec * 3.2 + en.homeZ) * 0.9;
+        const targetYaw = Math.atan2(dx, dz);
+        en.yaw = this.smoothYaw(en.yaw, targetYaw, dt * 6);
+        en.x += ((dx / distGoal) * en.speed + sepX * 0.3) * dt;
+        en.z += ((dz / distGoal) * en.speed + sepZ * 0.3) * dt;
+        const swoop = en.attackCooldown < 0.5 ? -1.4 : 0;
+        en.y = terrainHeightAt(en.x, en.z) + 8.5 + swoop + Math.sin(nowSec * 3.2 + en.homeZ) * 0.9;
 
         const wL = en.mesh.getObjectByName('wingLeft');
         const wR = en.mesh.getObjectByName('wingRight');
         if (wL && wR) {
-          const flap = Math.sin(nowSec * 9.5 + en.homeX) * 0.55;
+          const flap = Math.sin(nowSec * 9.5 + idx) * 0.55;
           wL.rotation.z = flap;
           wR.rotation.z = -flap;
         }
@@ -2770,9 +2982,10 @@ export class GameEngine {
         if (bestDist <= en.aggroRadius && en.attackCooldown <= 0) {
           en.attackCooldown = 2.6;
           this.audio.playDinoAttack('skywing');
-          const boltGeo = new THREE.SphereGeometry(0.28, 8, 8);
-          const boltMat = new THREE.MeshBasicMaterial({ color: 0x2dd4bf });
-          const boltMesh = new THREE.Mesh(boltGeo, boltMat);
+          const boltMesh = new THREE.Mesh(
+            new THREE.SphereGeometry(0.28, 8, 8),
+            new THREE.MeshBasicMaterial({ color: 0x2dd4bf }),
+          );
           const start = new THREE.Vector3(en.x, en.y - 0.3, en.z);
           const aim = new THREE.Vector3(nearest.x - en.x, nearest.y + 1.0 - en.y, nearest.z - en.z).normalize();
           boltMesh.position.copy(start);
@@ -2786,14 +2999,22 @@ export class GameEngine {
           });
         }
       } else {
-        // Ground / Platform / Drone enemies actively patrol & chase
         if (bestDist <= en.aggroRadius) {
           const dx = nearest.x - en.x;
           const dz = nearest.z - en.z;
-          en.yaw = Math.atan2(dx, dz);
+          const targetYaw = Math.atan2(dx, dz);
+          en.yaw = this.smoothYaw(en.yaw, targetYaw, dt * 8);
+
+          // Raptor burst pounce when mid-range
+          if (en.kind === 'raptor' && bestDist > 4.2 && bestDist < 10 && en.lungeTimer <= 0 && en.attackCooldown <= 0.2) {
+            en.lungeTimer = 0.45;
+          }
+          const speedBoost = en.lungeTimer > 0 ? 1.45 : 1.0;
+
           if (bestDist > 2.3) {
-            en.x += (dx / bestDist) * en.speed * dt;
-            en.z += (dz / bestDist) * en.speed * dt;
+            en.x += ((dx / bestDist) * en.speed * speedBoost + sepX) * dt;
+            en.z += ((dz / bestDist) * en.speed * speedBoost + sepZ) * dt;
+            isMoving = true;
           } else if (en.attackCooldown <= 0) {
             en.attackCooldown = 1.45;
             this.audio.playDinoAttack(en.kind);
@@ -2802,33 +3023,47 @@ export class GameEngine {
             }
           }
         } else {
-          const patrolR = en.platformIdx >= 0 ? 3.2 : 9.0;
-          const tx = en.homeX + Math.cos(nowSec * 0.65 + en.homeZ) * patrolR;
-          const tz = en.homeZ + Math.sin(nowSec * 0.65 + en.homeX) * patrolR;
+          const patrolR = en.platformIdx >= 0 ? 3.8 : 9.5;
+          const tx = en.homeX + Math.cos(nowSec * 0.65 + idx * 1.9) * patrolR;
+          const tz = en.homeZ + Math.sin(nowSec * 0.65 + idx * 1.9) * patrolR;
           const dx = tx - en.x;
           const dz = tz - en.z;
           const d = Math.hypot(dx, dz);
-          if (d > 0.4) {
-            en.yaw = Math.atan2(dx, dz);
-            en.x += (dx / d) * (en.speed * 0.55) * dt;
-            en.z += (dz / d) * (en.speed * 0.55) * dt;
+          if (d > 0.5) {
+            en.yaw = this.smoothYaw(en.yaw, Math.atan2(dx, dz), dt * 5);
+            en.x += ((dx / d) * (en.speed * 0.52) + sepX * 0.4) * dt;
+            en.z += ((dz / d) * (en.speed * 0.52) + sepZ * 0.4) * dt;
+            isMoving = true;
           }
         }
 
         if (en.platformIdx >= 0) {
-          const fp = this.floatingPlatforms[en.platformIdx];
-          const dPlat = Math.hypot(en.x - fp.x, en.z - fp.z);
-          if (dPlat > fp.radius - 1.2) {
-            en.x = fp.x + ((en.x - fp.x) / dPlat) * (fp.radius - 1.2);
-            en.z = fp.z + ((en.z - fp.z) / dPlat) * (fp.radius - 1.2);
+          const ep = this.elevatedPlatforms[en.platformIdx];
+          const dPlat = Math.hypot(en.x - ep.x, en.z - ep.z);
+          if (dPlat > ep.deckRadius - 1.1) {
+            en.x = ep.x + ((en.x - ep.x) / dPlat) * (ep.deckRadius - 1.1);
+            en.z = ep.z + ((en.z - ep.z) / dPlat) * (ep.deckRadius - 1.1);
           }
-          en.y = fp.deckY;
+          en.y = ep.deckY;
         } else if (en.kind !== 'drone') {
           _vec3.set(en.x, en.y, en.z);
           this.resolveSolidObstacles(_vec3, 0.7, false);
           en.x = _vec3.x;
           en.z = _vec3.z;
           en.y = terrainHeightAt(en.x, en.z);
+        }
+
+        // Stride & head-bob animation
+        const legL = en.mesh.getObjectByName('legL');
+        const legR = en.mesh.getObjectByName('legR');
+        const dHead = en.mesh.getObjectByName('dinoHead');
+        if (legL && legR) {
+          const s = isMoving ? Math.sin(nowSec * 10 + idx) * 0.45 : 0;
+          legL.rotation.x = s;
+          legR.rotation.x = -s;
+        }
+        if (dHead) {
+          dHead.rotation.x = en.attackCooldown > 1.1 ? 0.35 : Math.sin(nowSec * 4 + idx) * 0.08;
         }
       }
 
@@ -2837,17 +3072,22 @@ export class GameEngine {
     }
   }
 
+  private smoothYaw(current: number, target: number, step: number): number {
+    let diff = target - current;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    return current + diff * Math.min(1, step);
+  }
+
   private updateBossFightAI(dt: number): void {
     if (!this.bossState.active || this.phase !== 'boss_fight') return;
 
-    // 7 distinct stages across 6000 HP
     const hpRatio = this.bossState.hp / this.bossState.maxHp;
     const computedStage = Math.min(7, Math.max(1, 8 - Math.ceil(hpRatio * 7)));
 
     if (computedStage > this.bossCurrentStage) {
       this.bossCurrentStage = computedStage;
       this.bossState.stage = computedStage;
-      // Enter Immunity Shield phase when transitioning between stages
       this.bossState.immune = true;
       this.bossState.resting = false;
       this.bossImmuneTimer = 2.8;
@@ -2857,8 +3097,8 @@ export class GameEngine {
       this.audio.speakAtlas(`Entering stage ${computedStage}. ${stageLabel}.`);
 
       if (computedStage === 4 || computedStage === 7) {
-        this.createEnemy(`drone-s${computedStage}-1`, 'drone', -12, 75, -8, -1);
-        this.createEnemy(`drone-s${computedStage}-2`, 'drone', 12, 75, -8, -1);
+        this.createEnemy(`drone-s${computedStage}-1`, 'drone', -12, 75, -8, -1, null);
+        this.createEnemy(`drone-s${computedStage}-2`, 'drone', 12, 75, -8, -1, null);
       }
     }
 
@@ -2867,7 +3107,6 @@ export class GameEngine {
       this.bossPos.y = THREE.MathUtils.damp(this.bossPos.y, 82.0, 5, dt);
       if (this.bossImmuneTimer <= 0) {
         this.bossState.immune = false;
-        // Brief melee rest window after each stage transition!
         this.bossState.resting = true;
         this.bossRestTimer = 5.5;
         this.bossState.subtitle = `STAGE ${this.bossState.stage}/7 · SHIELD DOWN · ATLAS DESCENDING (MELEE WINDOW)!`;
@@ -2877,7 +3116,6 @@ export class GameEngine {
 
     if (this.bossState.resting) {
       this.bossRestTimer -= dt;
-      // Come down to deck level so Melee weapons can strike!
       this.bossPos.y = THREE.MathUtils.damp(this.bossPos.y, 75.0, 6, dt);
       if (this.bossRestTimer <= 0) {
         this.bossState.resting = false;
@@ -2887,7 +3125,6 @@ export class GameEngine {
       return;
     }
 
-    // Normally hovers overhead (Bow targetable)
     this.bossPos.y = THREE.MathUtils.damp(this.bossPos.y, 81.2, 5, dt);
     const orbitTime = performance.now() * 0.00042;
     this.bossPos.x = Math.sin(orbitTime) * 7.5;
@@ -2897,7 +3134,6 @@ export class GameEngine {
     this.bossAttackTimer -= dt;
     if (this.bossAttackTimer <= 0) {
       this.bossCycleCount += 1;
-      // Every 5 attack cycles, descend to deck in a Rest animation so players can hit with Melee!
       if (this.bossCycleCount % 5 === 0) {
         this.bossState.resting = true;
         this.bossRestTimer = 6.2;
@@ -2910,27 +3146,24 @@ export class GameEngine {
       this.bossAttackTimer = cadence;
       this.audio.playBossTelegraph();
 
-      // In Stage 3+, red warning lines fire after exactly 1.0 second!
       const lineDuration = stage >= 3 ? 1.0 : 1.5;
       const baseAng = Math.atan2(this.playerPos.x - this.bossPos.x, this.playerPos.z - this.bossPos.z);
       const uid = `${Date.now()}-${this.bossCycleCount}`;
 
       if (stage === 1) {
         if (this.bossCycleCount % 2 === 0) {
-          this.spawnTelegraphMesh(`tel-${uid}-l`, 'line', this.bossPos.x, this.bossPos.z, 2.2, baseAng, 34, lineDuration, 22);
+          this.spawnTelegraphMesh(`tel-${uid}-l`, 'line', this.bossPos.x, this.bossPos.z, 2.2, baseAng, 34, lineDuration, 20);
         } else {
-          this.spawnTelegraphMesh(`tel-${uid}-c`, 'circle', this.playerPos.x, this.playerPos.z, 5.2, 0, 0, 1.45, 24);
+          this.spawnTelegraphMesh(`tel-${uid}-c`, 'circle', this.playerPos.x, this.playerPos.z, 5.2, 0, 0, 1.45, 22);
         }
       } else if (stage === 2) {
-        this.spawnTelegraphMesh(`tel-${uid}-l1`, 'line', this.bossPos.x, this.bossPos.z, 2.1, baseAng - 0.28, 36, lineDuration, 24);
-        this.spawnTelegraphMesh(`tel-${uid}-l2`, 'line', this.bossPos.x, this.bossPos.z, 2.1, baseAng + 0.28, 36, lineDuration, 24);
-        this.spawnTelegraphMesh(`tel-${uid}-c`, 'circle', this.playerPos.x, this.playerPos.z, 4.6, 0, 0, 1.4, 24);
+        this.spawnTelegraphMesh(`tel-${uid}-l1`, 'line', this.bossPos.x, this.bossPos.z, 2.1, baseAng - 0.28, 36, lineDuration, 22);
+        this.spawnTelegraphMesh(`tel-${uid}-l2`, 'line', this.bossPos.x, this.bossPos.z, 2.1, baseAng + 0.28, 36, lineDuration, 22);
+        this.spawnTelegraphMesh(`tel-${uid}-c`, 'circle', this.playerPos.x, this.playerPos.z, 4.6, 0, 0, 1.4, 22);
       } else if (stage === 3) {
-        // Stage 3: Rapid 1.0s Red-Line Beams!
-        this.spawnTelegraphMesh(`tel-${uid}-l1`, 'line', this.bossPos.x, this.bossPos.z, 2.3, baseAng, 38, 1.0, 26);
-        this.spawnTelegraphMesh(`tel-${uid}-c`, 'circle', this.playerPos.x, this.playerPos.z, 4.8, 0, 0, 1.35, 26);
+        this.spawnTelegraphMesh(`tel-${uid}-l1`, 'line', this.bossPos.x, this.bossPos.z, 2.3, baseAng, 38, 1.0, 24);
+        this.spawnTelegraphMesh(`tel-${uid}-c`, 'circle', this.playerPos.x, this.playerPos.z, 4.8, 0, 0, 1.35, 24);
       } else if (stage === 4) {
-        // Cross-beam X-grid (1.0s)
         for (let k = 0; k < 4; k++) {
           this.spawnTelegraphMesh(
             `tel-${uid}-x${k}`,
@@ -2941,16 +3174,14 @@ export class GameEngine {
             baseAng + (k * Math.PI) / 2,
             38,
             1.0,
-            25,
+            24,
           );
         }
       } else if (stage === 5) {
-        // Expanding Shockwave Ring + Gravity Slow Orb + 1.0s Laser
-        this.spawnShockwaveRing(this.bossPos.x, this.bossPos.z, 25, 24);
+        this.spawnShockwaveRing(this.bossPos.x, this.bossPos.z, 25, 22);
         this.spawnBossSlowField(this.playerPos.x, this.playerPos.z, 7.0);
-        this.spawnTelegraphMesh(`tel-${uid}-l`, 'line', this.bossPos.x, this.bossPos.z, 2.2, baseAng, 38, 1.0, 26);
+        this.spawnTelegraphMesh(`tel-${uid}-l`, 'line', this.bossPos.x, this.bossPos.z, 2.2, baseAng, 38, 1.0, 24);
       } else if (stage === 6) {
-        // Solar Barrage: 3 Beams (1.0s) + Twin Mortars
         for (let k = -1; k <= 1; k++) {
           this.spawnTelegraphMesh(
             `tel-${uid}-b${k}`,
@@ -2961,12 +3192,11 @@ export class GameEngine {
             baseAng + k * 0.42,
             38,
             1.0,
-            27,
+            25,
           );
         }
-        this.spawnTelegraphMesh(`tel-${uid}-m1`, 'circle', this.playerPos.x, this.playerPos.z, 4.5, 0, 0, 1.25, 26);
+        this.spawnTelegraphMesh(`tel-${uid}-m1`, 'circle', this.playerPos.x, this.playerPos.z, 4.5, 0, 0, 1.25, 25);
       } else {
-        // Stage 7 Final Overdrive: 4-way 1.0s beams + expanding ring + mortar
         for (let k = 0; k < 4; k++) {
           this.spawnTelegraphMesh(
             `tel-${uid}-f${k}`,
@@ -2974,14 +3204,14 @@ export class GameEngine {
             this.bossPos.x,
             this.bossPos.z,
             2.2,
-            (this.bossCycleCount * 0.5) + (k * Math.PI) / 2,
+            this.bossCycleCount * 0.5 + (k * Math.PI) / 2,
             38,
             1.0,
-            28,
+            26,
           );
         }
-        this.spawnShockwaveRing(this.bossPos.x, this.bossPos.z, 26, 24);
-        this.spawnTelegraphMesh(`tel-${uid}-fm`, 'circle', this.playerPos.x, this.playerPos.z, 4.8, 0, 0, 1.2, 28);
+        this.spawnShockwaveRing(this.bossPos.x, this.bossPos.z, 26, 22);
+        this.spawnTelegraphMesh(`tel-${uid}-fm`, 'circle', this.playerPos.x, this.playerPos.z, 4.8, 0, 0, 1.2, 26);
       }
     }
   }
@@ -3081,7 +3311,7 @@ export class GameEngine {
     geo.rotateX(-Math.PI / 2);
 
     const mat = new THREE.MeshBasicMaterial({
-      color: shape === 'circle' ? 0xf97316 : 0xef4444,
+      color: shape === 'circle' ? 0xf59e0b : 0x38bdf8,
       transparent: true,
       opacity: 0.32,
       side: THREE.DoubleSide,
@@ -3196,8 +3426,8 @@ export class GameEngine {
       this.bossVisual.coreMat.emissive.setHex(0xf59e0b);
       this.bossVisual.coreMat.emissiveIntensity = 2.8;
     } else {
-      this.bossVisual.coreMat.color.setHex(0xff3b30);
-      this.bossVisual.coreMat.emissive.setHex(0xdc2626);
+      this.bossVisual.coreMat.color.setHex(0xf97316);
+      this.bossVisual.coreMat.emissive.setHex(0xea580c);
       this.bossVisual.coreMat.emissiveIntensity = 2.0;
     }
   }
@@ -3336,7 +3566,6 @@ export class GameEngine {
       });
     }
 
-    // Floating health bars above enemies
     const enemyLabels: EnemyHudLabel[] = [];
     for (const en of this.enemies) {
       if (en.hp <= 0) continue;
@@ -3347,22 +3576,23 @@ export class GameEngine {
       _projVec.project(this.camera);
       const visible = _projVec.z > -1 && _projVec.z < 1;
       if (!visible) continue;
-      const labelName =
+      const baseName =
         en.kind === 'theropod'
           ? 'Apex Theropod'
           : en.kind === 'skywing'
             ? 'Sky-Pteron (Use Bow)'
             : en.kind === 'drone'
               ? 'Security Drone'
-              : 'Raptor Stalker';
+              : 'Raptor';
       enemyLabels.push({
         id: en.id,
-        name: labelName,
+        name: en.guardBeaconId !== null ? `${baseName} · Guardian` : baseName,
         screenX: (_projVec.x * 0.5 + 0.5) * w,
         screenY: (-_projVec.y * 0.5 + 0.5) * h,
         hp: en.hp,
         maxHp: en.maxHp,
         visible,
+        guardBeaconId: en.guardBeaconId,
       });
     }
 
@@ -3410,6 +3640,7 @@ export class GameEngine {
           z: b.z,
           repaired: b.repaired,
           isFloating: b.isFloating,
+          locked: b.locked,
         })),
         enemies: this.enemies.map((e) => ({ x: e.x, z: e.z, isFlying: e.kind === 'skywing' })),
       },

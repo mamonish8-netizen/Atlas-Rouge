@@ -45,6 +45,7 @@ export interface WorldSyncPayload {
     hp: number;
     maxHp: number;
     aggroRadius: number;
+    guardBeaconId: number | null;
   }>;
   telegraphs: Array<{
     id: string;
@@ -432,12 +433,26 @@ export class MultiplayerManager {
   }
 
   public updateLocalLobbyProfile(name: string, archetype: CloneArchetypeId, ready: boolean): void {
-    const me = this.members.get(this.localId);
-    if (me) {
+    let me = this.members.get(this.localId);
+    if (!me) {
+      me = this.createMemberObj(this.localId, name, archetype, this.isHost ? true : ready, this.isHost);
+      this.members.set(this.localId, me);
+    } else {
       me.name = name;
       me.archetype = archetype;
-      me.ready = ready;
+      me.ready = this.isHost ? true : ready;
+      me.isHost = this.isHost;
     }
+
+    if (this.isSolo) {
+      // Strictly keep only local clone in Solo Mode
+      for (const id of Array.from(this.members.keys())) {
+        if (id !== this.localId) this.members.delete(id);
+      }
+      this.emitRoster();
+      return;
+    }
+
     if (this.isHost) {
       this.broadcast({ type: 'lobby_roster', members: Array.from(this.members.values()) });
       this.emitRoster();
@@ -445,7 +460,7 @@ export class MultiplayerManager {
       this.broadcast({
         type: 'ready_toggle',
         id: this.localId,
-        ready,
+        ready: me.ready,
         name,
         archetype,
       });
@@ -453,9 +468,18 @@ export class MultiplayerManager {
     }
   }
 
+  public getOrderedLocalSlotIndex(): number {
+    if (this.isSolo) return 0;
+    const ids = Array.from(this.members.keys());
+    const idx = ids.indexOf(this.localId);
+    return idx >= 0 ? idx % 4 : 0;
+  }
+
   public launchGame(): void {
     if (!this.isHost) return;
-    this.broadcast({ type: 'launch_game' });
+    if (!this.isSolo) {
+      this.broadcast({ type: 'launch_game' });
+    }
     this.onGameLaunch?.();
   }
 
