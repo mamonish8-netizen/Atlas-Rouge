@@ -1,0 +1,6 @@
+{
+  "name": "ROGUE BIOSPHERE: ATLAS",
+  "description": "Hardware-accelerated 3D multiplayer co-op survival and boss-rush inside an orbital biosphere.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
