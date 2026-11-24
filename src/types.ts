@@ -330,6 +330,7 @@ export interface HudSnapshot {
   bowCharge: number;
   isAiming: boolean;
   isDashing: boolean;
+  adminGodMode: boolean;
   pointerLocked: boolean;
   interactPrompt: string | null;
   interactProgress: number;

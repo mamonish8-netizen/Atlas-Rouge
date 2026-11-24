@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import {
+  ArrowUpCircle,
   Axe,
   Backpack,
   Check,
@@ -14,9 +15,11 @@ import {
   Play,
   Settings,
   Shield,
+  Terminal,
   Users,
   Volume2,
   Wrench,
+  Zap,
 } from 'lucide-react';
 import {
   CLONE_ARCHETYPES,
@@ -489,14 +492,25 @@ interface GameHudProps {
   partyMembers: PartyMember[];
   localId: string;
   localArchetype: CloneArchetypeId;
+  isHost: boolean;
   isMuted: boolean;
   craftingOpen: boolean;
+  adminOpen: boolean;
   pauseOpen: boolean;
   noticeText: string | null;
   quality: GraphicsQuality;
   volumes: { master: number; sfx: number; voice: number };
   onOpenCrafting: () => void;
   onCloseCrafting: () => void;
+  onOpenAdmin: () => void;
+  onCloseAdmin: () => void;
+  onAdminJumpElevatorReady: () => void;
+  onAdminStartElevatorRide: () => void;
+  onAdminTriggerBossWake: () => void;
+  onAdminShowcaseBoss: (stage: number, forceDescend?: boolean) => void;
+  onAdminForceBossDescend: () => void;
+  onAdminGrantMaxGear: () => void;
+  onAdminToggleGodMode: () => void;
   onCraft: (id: string) => void;
   onSmeltMetal: () => void;
   onUpgradeGear: (kind: 'pickaxe' | 'hatchet' | 'armor') => void;
@@ -514,14 +528,25 @@ export const GameHud: React.FC<GameHudProps> = ({
   partyMembers,
   localId,
   localArchetype,
+  isHost,
   isMuted,
   craftingOpen,
+  adminOpen,
   pauseOpen,
   noticeText,
   quality,
   volumes,
   onOpenCrafting,
   onCloseCrafting,
+  onOpenAdmin,
+  onCloseAdmin,
+  onAdminJumpElevatorReady,
+  onAdminStartElevatorRide,
+  onAdminTriggerBossWake,
+  onAdminShowcaseBoss,
+  onAdminForceBossDescend,
+  onAdminGrantMaxGear,
+  onAdminToggleGodMode,
   onCraft,
   onSmeltMetal,
   onUpgradeGear,
@@ -800,94 +825,117 @@ export const GameHud: React.FC<GameHudProps> = ({
         )}
       </div>
 
-      {/* TOP-RIGHT: Biosphere Radar Minimap (scaled for 215m radius) */}
-      <div className="fixed top-4 right-4 bg-slate-950/90 border border-white/15 rounded-xl p-2.5 w-44 space-y-1.5">
-        <div className="flex items-center justify-between text-[11px] text-slate-400 px-1">
-          <span>Biosphere Radar</span>
-          <span className="font-mono-nums text-cyan-400">
-            {repairedCount}/{totalBeacons}
-          </span>
-        </div>
-        <div className="relative w-38 h-38 mx-auto rounded-full bg-slate-900 border border-cyan-500/25 overflow-hidden">
-          <div
-            className="absolute w-3.5 h-3.5 rounded-full bg-slate-400 border border-white/50 -translate-x-1/2 -translate-y-1/2"
-            style={{ left: '50%', top: '50%' }}
-            title="Central Spire"
-          />
-          {/* Forging Station Amber Marker on East Edge */}
-          <div
-            className="absolute w-3 h-3 rounded-xs bg-amber-500 border border-white -translate-x-1/2 -translate-y-1/2 flex items-center justify-center text-[8px] font-bold text-slate-950"
-            style={{
-              left: `${50 + (hud.minimapEntities.forgeX / 215) * 45}%`,
-              top: `${50 + (hud.minimapEntities.forgeZ / 215) * 45}%`,
-            }}
-            title="Forging Station"
-          >
-            F
+      {/* TOP-RIGHT: Biosphere Radar Minimap + Admin Showcase Console Trigger */}
+      <div className="fixed top-4 right-4 w-44 space-y-2">
+        <div className="bg-slate-950/90 border border-white/15 rounded-xl p-2.5 space-y-1.5">
+          <div className="flex items-center justify-between text-[11px] text-slate-400 px-1">
+            <span>Biosphere Radar</span>
+            <span className="font-mono-nums text-cyan-400">
+              {repairedCount}/{totalBeacons}
+            </span>
           </div>
+          <div className="relative w-38 h-38 mx-auto rounded-full bg-slate-900 border border-cyan-500/25 overflow-hidden">
+            <div
+              className="absolute w-3.5 h-3.5 rounded-full bg-slate-400 border border-white/50 -translate-x-1/2 -translate-y-1/2"
+              style={{ left: '50%', top: '50%' }}
+              title="Central Spire"
+            />
+            {/* Forging Station Amber Marker on East Edge */}
+            <div
+              className="absolute w-3 h-3 rounded-xs bg-amber-500 border border-white -translate-x-1/2 -translate-y-1/2 flex items-center justify-center text-[8px] font-bold text-slate-950"
+              style={{
+                left: `${50 + (hud.minimapEntities.forgeX / 215) * 45}%`,
+                top: `${50 + (hud.minimapEntities.forgeZ / 215) * 45}%`,
+              }}
+              title="Forging Station"
+            >
+              F
+            </div>
 
-          {hud.minimapEntities.beacons.map((b) => {
-            const mx = 50 + (b.x / 215) * 45;
-            const mz = 50 + (b.z / 215) * 45;
-            return (
-              <div
-                key={b.id}
-                className={`absolute w-2.5 h-2.5 -translate-x-1/2 -translate-y-1/2 ${
-                  b.isFloating ? 'rounded-xs' : 'rounded-full'
-                } ${
-                  b.repaired
-                    ? 'bg-emerald-400'
-                    : b.locked
-                      ? 'bg-amber-400 ring-2 ring-amber-300/70'
-                      : 'bg-cyan-400 ring-2 ring-cyan-300/80'
-                }`}
-                style={{ left: `${mx}%`, top: `${mz}%` }}
-                title={
-                  b.repaired
-                    ? 'Beacon Online'
-                    : b.locked
-                      ? 'Locked (Calm Guardians)'
-                      : 'Unlocked (Ready to Repair)'
-                }
-              />
-            );
-          })}
-          {hud.minimapEntities.enemies.map((e, idx) => {
-            const mx = 50 + (e.x / 215) * 45;
-            const mz = 50 + (e.z / 215) * 45;
-            if (mx < 2 || mx > 98 || mz < 2 || mz > 98) return null;
-            return (
-              <div
-                key={idx}
-                className={`absolute w-1.5 h-1.5 rounded-full -translate-x-1/2 -translate-y-1/2 ${
-                  e.isFlying ? 'bg-sky-300' : 'bg-amber-400'
-                }`}
-                style={{ left: `${mx}%`, top: `${mz}%` }}
-              />
-            );
-          })}
-          {hud.minimapEntities.teammates.map((t) => {
-            const mx = 50 + (t.x / 215) * 45;
-            const mz = 50 + (t.z / 215) * 45;
-            return (
-              <div
-                key={t.id}
-                className="absolute w-2 h-2 rounded-full border border-white -translate-x-1/2 -translate-y-1/2"
-                style={{ left: `${mx}%`, top: `${mz}%`, backgroundColor: t.color }}
-              />
-            );
-          })}
-          <div
-            className="absolute w-2.5 h-2.5 bg-white rounded-full border border-slate-950 -translate-x-1/2 -translate-y-1/2"
-            style={{
-              left: `${50 + (hud.minimapEntities.playerX / 215) * 45}%`,
-              top: `${50 + (hud.minimapEntities.playerZ / 215) * 45}%`,
-            }}
-          />
+            {hud.minimapEntities.beacons.map((b) => {
+              const mx = 50 + (b.x / 215) * 45;
+              const mz = 50 + (b.z / 215) * 45;
+              return (
+                <div
+                  key={b.id}
+                  className={`absolute w-2.5 h-2.5 -translate-x-1/2 -translate-y-1/2 ${
+                    b.isFloating ? 'rounded-xs' : 'rounded-full'
+                  } ${
+                    b.repaired
+                      ? 'bg-emerald-400'
+                      : b.locked
+                        ? 'bg-amber-400 ring-2 ring-amber-300/70'
+                        : 'bg-cyan-400 ring-2 ring-cyan-300/80'
+                  }`}
+                  style={{ left: `${mx}%`, top: `${mz}%` }}
+                  title={
+                    b.repaired
+                      ? 'Beacon Online'
+                      : b.locked
+                        ? 'Locked (Calm Guardians)'
+                        : 'Unlocked (Ready to Repair)'
+                  }
+                />
+              );
+            })}
+            {hud.minimapEntities.enemies.map((e, idx) => {
+              const mx = 50 + (e.x / 215) * 45;
+              const mz = 50 + (e.z / 215) * 45;
+              if (mx < 2 || mx > 98 || mz < 2 || mz > 98) return null;
+              return (
+                <div
+                  key={idx}
+                  className={`absolute w-1.5 h-1.5 rounded-full -translate-x-1/2 -translate-y-1/2 ${
+                    e.isFlying ? 'bg-sky-300' : 'bg-amber-400'
+                  }`}
+                  style={{ left: `${mx}%`, top: `${mz}%` }}
+                />
+              );
+            })}
+            {hud.minimapEntities.teammates.map((t) => {
+              const mx = 50 + (t.x / 215) * 45;
+              const mz = 50 + (t.z / 215) * 45;
+              return (
+                <div
+                  key={t.id}
+                  className="absolute w-2 h-2 rounded-full border border-white -translate-x-1/2 -translate-y-1/2"
+                  style={{ left: `${mx}%`, top: `${mz}%`, backgroundColor: t.color }}
+                />
+              );
+            })}
+            <div
+              className="absolute w-2.5 h-2.5 bg-white rounded-full border border-slate-950 -translate-x-1/2 -translate-y-1/2"
+              style={{
+                left: `${50 + (hud.minimapEntities.playerX / 215) * 45}%`,
+                top: `${50 + (hud.minimapEntities.playerZ / 215) * 45}%`,
+              }}
+            />
+          </div>
+          <div className="text-[10px] text-center font-mono-nums text-slate-400">
+            {hud.renderResolutionLabel}
+          </div>
         </div>
-        <div className="text-[10px] text-center font-mono-nums text-slate-400">
-          {hud.renderResolutionLabel}
-        </div>
+
+        <button
+          onClick={adminOpen ? onCloseAdmin : onOpenAdmin}
+          className={`w-full pointer-events-auto flex items-center justify-between px-3 py-2 rounded-xl border text-xs font-semibold transition-colors ${
+            adminOpen
+              ? 'bg-cyan-500 text-slate-950 border-cyan-300'
+              : 'bg-slate-950/92 hover:bg-slate-900 text-cyan-300 border-cyan-500/40'
+          }`}
+        >
+          <span className="flex items-center gap-1.5">
+            <Terminal className="w-3.5 h-3.5" />
+            <span>Admin Console</span>
+          </span>
+          <span className="text-[10px] font-mono-nums opacity-85">[~ / F8]</span>
+        </button>
+
+        {hud.adminGodMode && (
+          <div className="w-full text-center bg-emerald-500/20 border border-emerald-400/40 rounded-lg px-2 py-1 text-[10px] font-bold text-emerald-300">
+            GOD MODE ACTIVE
+          </div>
+        )}
       </div>
 
       {/* CENTER: Crosshair, Pointer Lock Prompt, Slow Warning, Interaction Prompt */}
@@ -914,7 +962,7 @@ export const GameHud: React.FC<GameHudProps> = ({
         </div>
       )}
 
-      {!hud.pointerLocked && !craftingOpen && !pauseOpen && hud.phase !== 'victory' && hud.phase !== 'defeat' && (
+      {!hud.pointerLocked && !craftingOpen && !adminOpen && !pauseOpen && hud.phase !== 'victory' && hud.phase !== 'defeat' && (
         <div className="fixed top-28 left-1/2 -translate-x-1/2 pointer-events-auto">
           <button
             onClick={onRequestPointerLock}
@@ -1008,7 +1056,7 @@ export const GameHud: React.FC<GameHudProps> = ({
       {/* BOTTOM-CENTER: Minimal Controls Strip (hotbar consolidated to top-left) */}
       {hud.phase !== 'victory' && hud.phase !== 'defeat' && (
         <div className="fixed bottom-3 left-1/2 -translate-x-1/2 bg-slate-950/82 border border-white/10 rounded-lg px-3.5 py-1 text-[11px] text-slate-400 whitespace-nowrap">
-          WASD Move · Mouse / Arrows / Q-Z Look · Shift Sprint · C Dodge · 1-4 Tools · LMB Pulse · RMB Aim · E Interact · V Bag/Forge · Esc Pause
+          WASD Move · Mouse / Arrows / Q-Z Look · Shift Sprint · C Dodge · 1-4 Tools · E Interact · V Bag/Forge · ~ Admin · Esc Pause
         </div>
       )}
 
@@ -1232,6 +1280,158 @@ export const GameHud: React.FC<GameHudProps> = ({
                     );
                   })}
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ADMIN & BOSS SHOWCASE CONSOLE (~ / F8) */}
+      {adminOpen && (
+        <div className="fixed inset-0 z-30 flex items-center justify-center bg-slate-950/84 pointer-events-auto p-6">
+          <div className="w-full max-w-2xl bg-slate-900 border border-cyan-500/35 rounded-2xl p-6 space-y-5 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <div className="flex items-center gap-2.5">
+                <Terminal className="w-5 h-5 text-cyan-400" />
+                <div>
+                  <h2 className="text-lg font-bold text-white font-display">
+                    Admin Showcase Console
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    Phase: <span className="text-cyan-300 font-mono-nums">{hud.phase}</span> · Shortcut: [~] or [F8]
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={onCloseAdmin}
+                className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white rounded-md"
+              >
+                Close (Esc)
+              </button>
+            </div>
+
+            {!isHost && (
+              <div className="text-xs text-amber-300 bg-amber-950/40 border border-amber-500/30 rounded-lg px-3.5 py-2.5">
+                Joined as Squad Client — Phase warps and Boss stage triggers are controlled by the Host (Solo or Host Co-Op). Local Gear &amp; God Mode work anytime.
+              </div>
+            )}
+
+            {/* Elevator & Cutscene Warps */}
+            <div className="bg-slate-950/80 border border-white/10 rounded-xl p-4 space-y-3">
+              <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-cyan-300">
+                <ArrowUpCircle className="w-4 h-4" />
+                <span>Elevator &amp; Spire Transitions</span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <button
+                  onClick={onAdminJumpElevatorReady}
+                  disabled={!isHost}
+                  className="px-3 py-2.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 disabled:opacity-40 text-slate-950 text-xs font-bold transition-colors text-left"
+                >
+                  <div>Unlock &amp; Warp to Elevator</div>
+                  <div className="text-[10px] font-medium opacity-80">7/7 Beacons · Press [E] at Spire</div>
+                </button>
+                <button
+                  onClick={onAdminStartElevatorRide}
+                  disabled={!isHost}
+                  className="px-3 py-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 text-slate-950 text-xs font-bold transition-colors text-left"
+                >
+                  <div>Ride Glass Elevator Now</div>
+                  <div className="text-[10px] font-medium opacity-80">Starts 360° Ascent Cutscene</div>
+                </button>
+                <button
+                  onClick={onAdminTriggerBossWake}
+                  disabled={!isHost}
+                  className="px-3 py-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-white border border-white/10 text-xs font-semibold transition-colors text-left"
+                >
+                  <div>Boss Wake Cutscene</div>
+                  <div className="text-[10px] text-slate-400">Apex Deck Awakening Intro</div>
+                </button>
+              </div>
+            </div>
+
+            {/* Boss Showcase & Stage Selector */}
+            <div className="bg-slate-950/80 border border-amber-500/30 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-amber-300">
+                  <Zap className="w-4 h-4" />
+                  <span>ATLAS Boss Showcase (Stages 1–7)</span>
+                </div>
+                {hud.boss.active && (
+                  <span className="text-[11px] font-mono-nums text-amber-200">
+                    Stage {hud.boss.stage}/7 · {hud.boss.hp} HP
+                  </span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <button
+                  onClick={() => onAdminShowcaseBoss(1, false)}
+                  disabled={!isHost}
+                  className="px-4 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-slate-950 text-xs font-bold transition-colors"
+                >
+                  Warp Directly to Boss Fight (Stage 1)
+                </button>
+                <button
+                  onClick={onAdminForceBossDescend}
+                  disabled={!isHost}
+                  className="px-4 py-2.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 disabled:opacity-40 border border-cyan-400/40 text-cyan-200 text-xs font-semibold transition-colors"
+                >
+                  Force Boss Descend (Melee Window)
+                </button>
+              </div>
+
+              <div>
+                <div className="text-[11px] text-slate-400 mb-2">Jump Directly to Boss Stage:</div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {[
+                    { s: 1, label: 'S1 Calibration' },
+                    { s: 2, label: 'S2 Targeting' },
+                    { s: 3, label: 'S3 1s Beams' },
+                    { s: 4, label: 'S4 Swarm+Cross' },
+                    { s: 5, label: 'S5 Shockwave' },
+                    { s: 6, label: 'S6 Solar Triad' },
+                    { s: 7, label: 'S7 Overdrive' },
+                  ].map((item) => (
+                    <button
+                      key={item.s}
+                      onClick={() => onAdminShowcaseBoss(item.s, false)}
+                      disabled={!isHost}
+                      className={`px-2.5 py-2 rounded-lg text-xs font-semibold border transition-colors ${
+                        hud.boss.active && hud.boss.stage === item.s
+                          ? 'bg-amber-500 text-slate-950 border-amber-300'
+                          : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border-white/10'
+                      } disabled:opacity-40`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Loadout & Testing Utilities */}
+            <div className="bg-slate-950/80 border border-white/10 rounded-xl p-4 space-y-2.5">
+              <div className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                Showcase Loadout &amp; Protection
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <button
+                  onClick={onAdminGrantMaxGear}
+                  className="px-4 py-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white border border-white/15 text-xs font-semibold transition-colors"
+                >
+                  Grant Max Tier-3 Gear, Bow &amp; +80 Arrows
+                </button>
+                <button
+                  onClick={onAdminToggleGodMode}
+                  className={`px-4 py-2.5 rounded-lg text-xs font-bold border transition-colors ${
+                    hud.adminGodMode
+                      ? 'bg-emerald-500 text-slate-950 border-emerald-300'
+                      : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-white/15'
+                  }`}
+                >
+                  {hud.adminGodMode ? 'God Mode: ON (Invulnerable)' : 'God Mode: OFF'}
+                </button>
               </div>
             </div>
           </div>

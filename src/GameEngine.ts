@@ -298,6 +298,8 @@ export class GameEngine {
   private running = false;
   private paused = false;
   private craftingOpen = false;
+  private adminOpen = false;
+  private adminGodMode = false;
   private frameId = 0;
   private lastTime = 0;
   private quality: GraphicsQuality = 'high';
@@ -400,6 +402,7 @@ export class GameEngine {
 
   public onHudUpdate: ((snapshot: HudSnapshot) => void) | null = null;
   public onToggleCrafting: ((open: boolean) => void) | null = null;
+  public onToggleAdmin: ((open: boolean) => void) | null = null;
   public onTogglePause: ((paused: boolean) => void) | null = null;
   public onMuteToggle: (() => void) | null = null;
   public onNotice: ((msg: string) => void) | null = null;
@@ -852,6 +855,8 @@ export class GameEngine {
     this.interactProgress = 0;
     this.paused = false;
     this.craftingOpen = false;
+    this.adminOpen = false;
+    this.adminGodMode = false;
 
     this.inventory = {
       wood: 2,
@@ -1438,13 +1443,268 @@ export class GameEngine {
 
   public setCraftingOpen(open: boolean): void {
     this.craftingOpen = open;
+    if (open) {
+      this.adminOpen = false;
+      this.onToggleAdmin?.(false);
+    }
     if (open && document.pointerLockElement === this.renderer?.domElement) {
       document.exitPointerLock();
     }
   }
 
+  public setAdminOpen(open: boolean): void {
+    this.adminOpen = open;
+    if (open) {
+      this.craftingOpen = false;
+      this.onToggleCrafting?.(false);
+      if (document.pointerLockElement === this.renderer?.domElement) {
+        document.exitPointerLock();
+      }
+    }
+  }
+
+  private ensureShowcaseLoadout(): void {
+    this.inventory.hasPickaxe = true;
+    this.inventory.hasHatchet = true;
+    this.inventory.hasBow = true;
+    this.inventory.arrows = Math.max(this.inventory.arrows, 50);
+    this.inventory.stims = Math.max(this.inventory.stims, 4);
+    if (!this.inventory.hasArmor) {
+      this.inventory.hasArmor = true;
+      this.inventory.armorTier = 2;
+      if (this.localRig) this.localRig.armorGroup.visible = true;
+    }
+    this.hp = this.maxHp;
+    this.stamina = this.maxStamina;
+  }
+
+  private clearBossHazardEntities(): void {
+    for (const t of this.telegraphs) {
+      this.scene.remove(t.mesh);
+      t.mesh.geometry.dispose();
+      t.mat.dispose();
+    }
+    this.telegraphs = [];
+    for (const sw of this.shockwaves) {
+      this.scene.remove(sw.mesh);
+      sw.mesh.geometry.dispose();
+      sw.mat.dispose();
+    }
+    this.shockwaves = [];
+    for (const sf of this.bossSlowFields) {
+      this.scene.remove(sf.mesh);
+      sf.mesh.geometry.dispose();
+    }
+    this.bossSlowFields = [];
+    for (const ep of this.enemyProjectiles) {
+      this.scene.remove(ep.mesh);
+    }
+    this.enemyProjectiles = [];
+  }
+
+  private unlockAllBeaconsForShowcase(): void {
+    for (const b of this.beacons) {
+      b.locked = false;
+      b.guardiansRemaining = 0;
+      b.repaired = true;
+      b.progress = 100;
+      b.woodDeposited = b.woodRequired;
+      b.stoneDeposited = b.stoneRequired;
+      b.metalDeposited = b.metalRequired;
+    }
+    this.stats.beaconsRepaired = this.beacons.length;
+  }
+
+  public adminJumpToElevatorReady(): void {
+    if (!this.running) return;
+    if (!this.mp.isHost) {
+      this.onNotice?.('Only the Co-Op Host can warp mission phases.');
+      return;
+    }
+    this.clearBossHazardEntities();
+    this.unlockAllBeaconsForShowcase();
+    this.ensureShowcaseLoadout();
+    this.phase = 'elevator_ready';
+    this.bossState.active = false;
+    this.bossState.immune = false;
+    this.bossState.resting = false;
+    this.bossState.subtitle = '';
+    this.cutsceneLine = null;
+    this.spire.elevatorCabin.position.y = 1.5;
+
+    const padY = terrainHeightAt(0, 12.8);
+    this.playerPos.set(0, padY, 12.8);
+    this.playerVel.set(0, 0, 0);
+    this.playerYaw = Math.PI;
+    this.camYaw = 0;
+    this.camPitch = 0.2;
+    this.grounded = true;
+    this.localRig.root.position.copy(this.playerPos);
+    this.localRig.root.rotation.y = this.playerYaw;
+
+    this.audio.playBeaconRepaired();
+    this.onNotice?.('ADMIN: All 7 Beacons Online · Step inside Spire & Press [E] to Ride Elevator!');
+  }
+
+  public adminStartElevatorRide(): void {
+    if (!this.running) return;
+    if (!this.mp.isHost) {
+      this.onNotice?.('Only the Co-Op Host can trigger the elevator ride.');
+      return;
+    }
+    this.clearBossHazardEntities();
+    this.unlockAllBeaconsForShowcase();
+    this.ensureShowcaseLoadout();
+    this.bossState.active = false;
+    this.bossState.immune = false;
+    this.bossState.resting = false;
+    this.bossState.subtitle = '';
+    this.spire.elevatorCabin.position.y = 1.5;
+    this.adminOpen = false;
+    this.onToggleAdmin?.(false);
+    this.beginElevatorCutscene();
+    this.onNotice?.('ADMIN: Ascending Central Spire Elevator to Apex Deck...');
+  }
+
+  public adminTriggerBossWake(): void {
+    if (!this.running) return;
+    if (!this.mp.isHost) {
+      this.onNotice?.('Only the Co-Op Host can trigger the boss cutscene.');
+      return;
+    }
+    this.clearBossHazardEntities();
+    this.unlockAllBeaconsForShowcase();
+    this.ensureShowcaseLoadout();
+    this.selectSlot('bow');
+    this.spire.elevatorCabin.position.y = 75.0;
+    this.bossState.active = false;
+    this.bossState.hp = this.bossState.maxHp;
+    this.bossState.stage = 1;
+    this.bossCurrentStage = 1;
+    this.bossState.immune = false;
+    this.bossState.resting = false;
+    this.bossCycleCount = 0;
+    this.adminOpen = false;
+    this.onToggleAdmin?.(false);
+    this.beginBossWakeCutscene();
+  }
+
+  public adminShowcaseBoss(stage = 1, forceDescend = false): void {
+    if (!this.running) return;
+    if (!this.mp.isHost) {
+      this.onNotice?.('Only the Co-Op Host can warp to the boss arena.');
+      return;
+    }
+    const targetStage = Math.max(1, Math.min(7, Math.round(stage)));
+    this.clearBossHazardEntities();
+    this.unlockAllBeaconsForShowcase();
+    this.ensureShowcaseLoadout();
+    this.selectSlot(forceDescend ? (this.inventory.hasHatchet ? 'hatchet' : 'pickaxe') : 'bow');
+
+    this.spire.elevatorCabin.position.y = 75.0;
+    this.phase = 'boss_fight';
+    this.cutsceneLine = null;
+
+    this.playerPos.set(0, 75.0, 16.5);
+    this.playerVel.set(0, 0, 0);
+    this.playerYaw = Math.PI;
+    this.camYaw = 0;
+    this.camPitch = 0.24;
+    this.grounded = true;
+    this.localRig.root.position.copy(this.playerPos);
+    this.localRig.root.rotation.y = this.playerYaw;
+
+    const maxHp = this.bossState.maxHp;
+    const stageHp =
+      targetStage === 1
+        ? maxHp
+        : Math.max(120, Math.round(maxHp * ((8 - targetStage - 0.15) / 7)));
+
+    this.bossState.active = true;
+    this.bossState.hp = stageHp;
+    this.bossState.stage = targetStage;
+    this.bossCurrentStage = targetStage;
+    this.bossState.immune = false;
+    this.bossImmuneTimer = 0;
+    this.bossCycleCount = 0;
+
+    if (forceDescend) {
+      this.bossState.resting = true;
+      this.bossRestTimer = 8.5;
+      this.bossPos.set(0, 75.0, -6);
+      this.bossState.subtitle = `ATLAS STAGE ${targetStage}/7 · DESCENDED FOR MELEE SHOWCASE!`;
+    } else {
+      this.bossState.resting = false;
+      this.bossRestTimer = 0;
+      this.bossAttackTimer = 0.55;
+      this.bossPos.set(0, 81.2, -10);
+      const stageLabel = STAGE_LABELS[targetStage - 1] ?? `STAGE ${targetStage}`;
+      this.bossState.subtitle = `ATLAS STAGE ${targetStage}/7 [${stageLabel}] · SHOWCASE ACTIVE`;
+    }
+    this.bossYaw = 0;
+
+    if ((targetStage === 4 || targetStage === 7) && !this.enemies.some((e) => e.kind === 'drone' && e.hp > 0)) {
+      this.createEnemy(`drone-adm-${Date.now()}-1`, 'drone', -12, 75, -8, -1, null);
+      this.createEnemy(`drone-adm-${Date.now()}-2`, 'drone', 12, 75, -8, -1, null);
+    }
+
+    this.audio.playBossRoar();
+    this.onNotice?.(`ADMIN: Warped to ATLAS Boss Fight (Stage ${targetStage}/7)`);
+  }
+
+  public adminForceBossDescend(): void {
+    if (!this.running) return;
+    if (!this.mp.isHost) {
+      this.onNotice?.('Only the Co-Op Host can control boss state.');
+      return;
+    }
+    if (this.phase !== 'boss_fight' || !this.bossState.active) {
+      this.adminShowcaseBoss(1, true);
+      return;
+    }
+    this.bossState.immune = false;
+    this.bossImmuneTimer = 0;
+    this.bossState.resting = true;
+    this.bossRestTimer = 8.5;
+    this.bossState.subtitle = 'ADMIN: ATLAS DESCENDED — MELEE DAMAGE WINDOW OPEN!';
+    this.onNotice?.('ADMIN: ATLAS forced to deck level for melee showcase (8.5s).');
+  }
+
+  public adminGrantMaxGear(): void {
+    if (!this.running) return;
+    this.inventory.hasPickaxe = true;
+    this.inventory.hasHatchet = true;
+    this.inventory.hasBow = true;
+    this.inventory.hasArmor = true;
+    this.inventory.pickaxeTier = 3;
+    this.inventory.hatchetTier = 3;
+    this.inventory.armorTier = 3;
+    this.inventory.arrows += 80;
+    this.inventory.stims += 5;
+    this.inventory.wood += 100;
+    this.inventory.stone += 100;
+    this.inventory.fiber += 100;
+    this.inventory.metal += 50;
+    this.inventory.refinedAlloy += 25;
+    if (this.localRig) this.localRig.armorGroup.visible = true;
+    this.hp = this.maxHp;
+    this.stamina = this.maxStamina;
+    this.audio.playForge();
+    this.onNotice?.('ADMIN: Tier-3 Max Gear, +80 Arrows, Full Shield & Showcase Resources Granted!');
+  }
+
+  public adminToggleGodMode(): boolean {
+    this.adminGodMode = !this.adminGodMode;
+    if (this.adminGodMode) {
+      this.hp = this.maxHp;
+      this.stamina = this.maxStamina;
+    }
+    this.onNotice?.(`ADMIN: God Mode ${this.adminGodMode ? 'ENABLED (Invulnerable)' : 'DISABLED'}`);
+    return this.adminGodMode;
+  }
+
   public requestPointerLock(): void {
-    if (!this.running || this.paused || this.craftingOpen) return;
+    if (!this.running || this.paused || this.craftingOpen || this.adminOpen) return;
     const el = this.renderer?.domElement;
     if (el && document.pointerLockElement !== el) {
       try {
@@ -1507,7 +1767,7 @@ export class GameEngine {
   };
 
   private handleWheel = (e: WheelEvent): void => {
-    if (!this.running || this.paused || this.craftingOpen) return;
+    if (!this.running || this.paused || this.craftingOpen || this.adminOpen) return;
     if (Math.abs(e.deltaY) > 4) {
       this.cycleOwnedSlot(e.deltaY > 0 ? 1 : -1);
     }
@@ -1530,6 +1790,16 @@ export class GameEngine {
 
     this.keys.add(code);
 
+    if (code === 'Backquote' || code === 'F8') {
+      e.preventDefault();
+      if (this.phase !== 'victory' && this.phase !== 'defeat') {
+        this.adminOpen = !this.adminOpen;
+        this.setAdminOpen(this.adminOpen);
+        this.onToggleAdmin?.(this.adminOpen);
+      }
+      return;
+    }
+
     if (code === 'KeyV') {
       e.preventDefault();
       if (this.phase !== 'victory' && this.phase !== 'defeat') {
@@ -1541,6 +1811,11 @@ export class GameEngine {
     }
 
     if (code === 'Escape') {
+      if (this.adminOpen) {
+        this.adminOpen = false;
+        this.onToggleAdmin?.(false);
+        return;
+      }
       if (this.craftingOpen) {
         this.craftingOpen = false;
         this.onToggleCrafting?.(false);
@@ -1557,7 +1832,7 @@ export class GameEngine {
       return;
     }
 
-    if (this.paused || this.craftingOpen) return;
+    if (this.paused || this.craftingOpen || this.adminOpen) return;
 
     if (key === '1' || code === 'Digit1' || code === 'Numpad1') this.selectSlot('pickaxe');
     else if (key === '2' || code === 'Digit2' || code === 'Numpad2') this.selectSlot('hatchet');
@@ -1581,14 +1856,14 @@ export class GameEngine {
     if ((code === 'ShiftLeft' || code === 'ShiftRight') && this.shiftDownAt > 0) {
       const heldMs = performance.now() - this.shiftDownAt;
       this.shiftDownAt = 0;
-      if (heldMs < 190 && !this.paused && !this.craftingOpen) {
+      if (heldMs < 190 && !this.paused && !this.craftingOpen && !this.adminOpen) {
         this.triggerDash();
       }
     }
   };
 
   private handleMouseMove = (e: MouseEvent): void => {
-    if (!this.running || this.paused || this.craftingOpen) return;
+    if (!this.running || this.paused || this.craftingOpen || this.adminOpen) return;
     if (this.pointerLocked) {
       this.camYaw -= e.movementX * 0.0024;
       this.camPitch = THREE.MathUtils.clamp(this.camPitch + e.movementY * 0.0021, -0.35, 1.15);
@@ -1609,7 +1884,7 @@ export class GameEngine {
   };
 
   private handleMouseDown = (e: MouseEvent): void => {
-    if (!this.running || this.paused || this.craftingOpen) return;
+    if (!this.running || this.paused || this.craftingOpen || this.adminOpen) return;
     const target = e.target as HTMLElement | null;
     if (target && target !== this.renderer.domElement) return;
 
@@ -1885,6 +2160,10 @@ export class GameEngine {
       if (this.mp.isHost) return;
       if (this.phase === 'jungle' && world.phase === 'elevator_ready') {
         this.audio.playBeaconRepaired();
+      }
+      if (this.isOnApexDeckPhase() && world.phase === 'elevator_ready') {
+        this.playerPos.set(0, terrainHeightAt(0, 12.8), 12.8);
+        this.spire.elevatorCabin.position.y = 1.5;
       }
       if (this.phase !== 'elevator_cutscene' && world.phase === 'elevator_cutscene') {
         this.beginElevatorCutscene();
@@ -2268,7 +2547,7 @@ export class GameEngine {
     }
 
     // Simultaneous Camera Look (Keyboard Arrow keys + Q/Z + Mouse Move + Pointer Lock)
-    if (!this.craftingOpen && !this.paused) {
+    if (!this.craftingOpen && !this.paused && !this.adminOpen) {
       if (this.keys.has('ArrowLeft') || this.keys.has('KeyQ')) this.camYaw += 2.3 * dt;
       if (this.keys.has('ArrowRight') || this.keys.has('KeyZ')) this.camYaw -= 2.3 * dt;
       if (this.keys.has('ArrowUp')) this.camPitch = THREE.MathUtils.clamp(this.camPitch - 1.5 * dt, -0.35, 1.15);
@@ -2297,7 +2576,7 @@ export class GameEngine {
 
     let moveX = 0;
     let moveZ = 0;
-    if (!this.craftingOpen && !this.paused) {
+    if (!this.craftingOpen && !this.paused && !this.adminOpen) {
       const fX = -Math.sin(this.camYaw);
       const fZ = -Math.cos(this.camYaw);
       const rX = Math.cos(this.camYaw);
@@ -3387,7 +3666,7 @@ export class GameEngine {
   }
 
   private damageLocalPlayer(rawDmg: number): void {
-    if (this.iFrames > 0 || this.hp <= 0) return;
+    if (this.adminGodMode || this.iFrames > 0 || this.hp <= 0) return;
     const arch = CLONE_ARCHETYPES[this.archetype];
     const armorByTier = [0, 0.35, 0.48, 0.6][this.inventory.armorTier] ?? 0;
     const armorReduction = armorByTier + arch.armorBonus;
@@ -3619,6 +3898,7 @@ export class GameEngine {
       bowCharge: this.bowCharge,
       isAiming: this.isAiming || this.bowDrawing,
       isDashing: this.dashTimer > 0,
+      adminGodMode: this.adminGodMode,
       pointerLocked: this.pointerLocked,
       interactPrompt: this.interactPrompt,
       interactProgress: this.interactProgress,

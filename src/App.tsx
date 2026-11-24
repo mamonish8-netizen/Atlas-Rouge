@@ -39,6 +39,7 @@ export default function App() {
 
   const [hud, setHud] = useState<HudSnapshot | null>(null);
   const [craftingOpen, setCraftingOpen] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
   const [pauseOpen, setPauseOpen] = useState(false);
   const [noticeText, setNoticeText] = useState<string | null>(null);
   const [volumes, setVolumes] = useState({ master: 0.75, sfx: 0.85, voice: 0.9 });
@@ -73,6 +74,7 @@ export default function App() {
 
     mp.onGameLaunch = () => {
       setCraftingOpen(false);
+      setAdminOpen(false);
       setPauseOpen(false);
       setScreen('playing');
       engine.startRun(profileRef.current.playerName, profileRef.current.archetype);
@@ -83,6 +85,9 @@ export default function App() {
     };
     engine.onToggleCrafting = (open) => {
       setCraftingOpen(open);
+    };
+    engine.onToggleAdmin = (open) => {
+      setAdminOpen(open);
     };
     engine.onTogglePause = (paused) => {
       setPauseOpen(paused);
@@ -196,6 +201,7 @@ export default function App() {
     engineRef.current?.stopRun();
     setPauseOpen(false);
     setCraftingOpen(false);
+    setAdminOpen(false);
     setHud(null);
     setScreen('lobby');
   };
@@ -242,8 +248,10 @@ export default function App() {
           partyMembers={partyMembers}
           localId={mpRef.current?.localId ?? ''}
           localArchetype={archetype}
+          isHost={isHost}
           isMuted={isMuted}
           craftingOpen={craftingOpen}
+          adminOpen={adminOpen}
           pauseOpen={pauseOpen}
           noticeText={noticeText}
           quality={quality}
@@ -255,6 +263,35 @@ export default function App() {
           onCloseCrafting={() => {
             setCraftingOpen(false);
             engineRef.current?.setCraftingOpen(false);
+          }}
+          onOpenAdmin={() => {
+            setAdminOpen(true);
+            engineRef.current?.setAdminOpen(true);
+          }}
+          onCloseAdmin={() => {
+            setAdminOpen(false);
+            engineRef.current?.setAdminOpen(false);
+          }}
+          onAdminJumpElevatorReady={() => {
+            engineRef.current?.adminJumpToElevatorReady();
+          }}
+          onAdminStartElevatorRide={() => {
+            engineRef.current?.adminStartElevatorRide();
+          }}
+          onAdminTriggerBossWake={() => {
+            engineRef.current?.adminTriggerBossWake();
+          }}
+          onAdminShowcaseBoss={(stage, forceDescend) => {
+            engineRef.current?.adminShowcaseBoss(stage, forceDescend);
+          }}
+          onAdminForceBossDescend={() => {
+            engineRef.current?.adminForceBossDescend();
+          }}
+          onAdminGrantMaxGear={() => {
+            engineRef.current?.adminGrantMaxGear();
+          }}
+          onAdminToggleGodMode={() => {
+            engineRef.current?.adminToggleGodMode();
           }}
           onCraft={(id) => {
             engineRef.current?.craftItem(id);
